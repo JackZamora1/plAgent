@@ -1,0 +1,11 @@
+# Test URLs for batch processing
+# Note: These are placeholder URLs for testing
+# Replace with actual obituary URLs when available
+
+# Lin Bingyao obituary (placeholder - will use local test file)
+https://www.news.cn/mil/2025/linbingyao/obituary.html
+
+# Additional test URLs (using same for now)
+https://www.news.cn/mil/2025/linbingyao/obituary.html
+
+https://www.news.cn/mil/2025/linbingyao/obituary.html

@@ -1,0 +1,12 @@
+anthropic>=0.40.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+psycopg2-binary
+python-dotenv
+requests
+beautifulsoup4
+rich
+tqdm
+pytest>=7.0.0
+pytest-html>=3.0.0
+pytest-json-report>=1.5.0

@@ -1,0 +1,8 @@
+# Sample URLs for batch processing
+# One URL per line
+# Lines starting with # are ignored
+
+# Example obituaries (replace with actual URLs)
+# https://www.news.cn/2025/obituary1.html
+# https://www.news.cn/2025/obituary2.html
+# https://www.news.cn/2025/obituary3.html
