@@ -578,6 +578,9 @@ Use the tools systematically to ensure high-quality extraction."""
         # Track tool calls
         tool_call_history: List[ToolResult] = []
 
+        # Track whether source text has been sent (for token optimization)
+        source_text_sent = False
+
         # Agentic loop
         with Progress(
             SpinnerColumn(),
@@ -599,6 +602,17 @@ Use the tools systematically to ensure high-quality extraction."""
                 # Track tokens
                 self.total_input_tokens += response.usage.input_tokens
                 self.total_output_tokens += response.usage.output_tokens
+
+                # OPTIMIZATION: After first turn, replace source text with reference to save tokens
+                # This prevents sending the full source text in every subsequent API call
+                if not source_text_sent and len(messages) > 0:
+                    source_text_sent = True
+                    # Replace the full source text in the first message with a compact reference
+                    # Claude retains the context from the first call
+                    original_content = messages[0]["content"]
+                    # Keep a short reference instead of full text
+                    messages[0]["content"] = "[Source text provided in initial message - context retained]"
+                    logger.debug(f"Source text optimization: reduced first message from {len(original_content)} to {len(messages[0]['content'])} chars")
 
                 logger.info(
                     f"Response: stop_reason={response.stop_reason}, "
