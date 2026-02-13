@@ -64,10 +64,11 @@ def test_save_officer_bio_tool_definition():
     # Verify tool name
     assert SAVE_OFFICER_BIO_TOOL['name'] == 'save_officer_bio', "Tool name should be 'save_officer_bio'"
 
-    # Verify description is informative
+    # Verify description is informative (optimized for token efficiency)
     description = SAVE_OFFICER_BIO_TOOL['description']
     assert len(description) > 50, "Description should be detailed"
-    assert 'PLA officer' in description, "Description should mention PLA officer"
+    assert 'officer' in description.lower(), "Description should mention officer"
+    assert 'bio' in description.lower(), "Description should mention bio"
 
     # Verify input schema
     schema = SAVE_OFFICER_BIO_TOOL['input_schema']
