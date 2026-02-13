@@ -31,12 +31,7 @@ def _parse_year(date_str: Optional[str]) -> Optional[int]:
 # Anthropic tool definition for date validation
 VALIDATE_DATES_TOOL = {
     "name": "validate_dates",
-    "description": (
-        "Check if extracted dates are chronologically consistent. "
-        "Verify that enlistment_date comes before party_membership_date and all promotion dates, "
-        "and that promotions are in chronological order. "
-        "Use this tool before finalizing the extraction to ensure date consistency."
-    ),
+    "description": "Verify dates are chronologically consistent (birth < enlistment < promotions < death).",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -250,16 +245,7 @@ def execute_validate_dates(tool_input: Dict[str, Any]) -> ToolResult:
 # Anthropic tool definition for information verification
 VERIFY_INFORMATION_TOOL = {
     "name": "verify_information_present",
-    "description": (
-        "Double-check the original source text to verify if specific information is actually present. "
-        "Use this tool if you're uncertain about whether certain biographical details were mentioned. "
-        "This helps avoid hallucination by confirming information exists in the source text. "
-        "Examples of when to use:\n"
-        "- Checking if a wife's name is mentioned\n"
-        "- Verifying if a retirement date is stated\n"
-        "- Confirming specific awards or positions\n"
-        "Returns the relevant excerpt from the text if found."
-    ),
+    "description": "Search source text to confirm if biographical details (wife, retirement date, awards, etc.) are mentioned. Returns matching excerpts or confirms absence. Prevents hallucination.",
     "input_schema": {
         "type": "object",
         "properties": {

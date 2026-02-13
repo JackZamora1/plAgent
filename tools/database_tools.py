@@ -200,12 +200,7 @@ def initialize_database():
 # Anthropic tool definition for officer lookup
 LOOKUP_OFFICER_TOOL = {
     "name": "lookup_existing_officer",
-    "description": (
-        "Search the database for an existing officer record by name. "
-        "Use this to check if this officer already exists and to retrieve any existing data "
-        "that might be relevant. This helps avoid duplicate entries and can provide "
-        "additional context about the officer's career."
-    ),
+    "description": "Search database for existing officer by name. Returns officer data if found, prevents duplicates.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -344,12 +339,7 @@ def execute_lookup_officer(tool_input: Dict[str, Any]) -> ToolResult:
 # Anthropic tool definition for unit lookup
 LOOKUP_UNIT_TOOL = {
     "name": "lookup_unit_by_name",
-    "description": (
-        "Look up a PLA unit by its name to get the unit_id. "
-        "Use this when you encounter unit names in promotions to link to the correct unit "
-        "in our database. Supports fuzzy matching to handle variations in unit names "
-        "(e.g., 'Eastern Theater Command' matches '东部战区')."
-    ),
+    "description": "Look up PLA unit by name to get unit_id. Supports fuzzy matching for unit name variations.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -522,64 +512,13 @@ def execute_lookup_unit(tool_input: Dict[str, Any]) -> ToolResult:
 # Anthropic tool definition for saving officer bio to database
 SAVE_TO_DATABASE_TOOL = {
     "name": "save_to_database",
-    "description": (
-        "Save the extracted officer biography to the PostgreSQL database. "
-        "Only call this after save_officer_bio has been called and you're confident "
-        "in the extraction quality. This persists the data for long-term storage and analysis."
-    ),
+    "description": "Persist officer bio to PostgreSQL. Call after save_officer_bio and validation.",
     "input_schema": {
         "type": "object",
         "properties": {
             "officer_bio": {
                 "type": "object",
-                "description": "The OfficerBio object to save to the database",
-                "properties": {
-                    "name": {"type": "string", "description": "Chinese name of the officer"},
-                    "source_url": {"type": "string", "description": "Source URL"},
-                    "pinyin_name": {"type": "string", "description": "Pinyin romanization"},
-                    "hometown": {"type": "string", "description": "Hometown/birthplace"},
-                    "birth_date": {"type": "string", "description": "Birth date (YYYY or YYYY-MM-DD)"},
-                    "enlistment_date": {"type": "string", "description": "Military enlistment date"},
-                    "party_membership_date": {"type": "string", "description": "CCP membership date"},
-                    "retirement_date": {"type": "string", "description": "Retirement date"},
-                    "death_date": {"type": "string", "description": "Date of death"},
-                    "congress_participation": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "CCP Congress participations"
-                    },
-                    "cppcc_participation": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "CPPCC participations"
-                    },
-                    "promotions": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "rank": {"type": "string"},
-                                "date": {"type": "string"},
-                                "unit": {"type": "string"}
-                            }
-                        },
-                        "description": "Military rank promotions"
-                    },
-                    "notable_positions": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Notable positions held"
-                    },
-                    "awards": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Military awards and honors"
-                    },
-                    "wife_name": {"type": "string", "description": "Spouse name"},
-                    "confidence_score": {"type": "number", "description": "Extraction confidence (0.0-1.0)"},
-                    "extraction_notes": {"type": "string", "description": "Notes about the extraction"}
-                },
-                "required": ["name", "source_url"]
+                "description": "The OfficerBio object returned from save_officer_bio"
             }
         },
         "required": ["officer_bio"]

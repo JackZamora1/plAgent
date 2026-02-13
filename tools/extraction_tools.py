@@ -177,19 +177,7 @@ def to_anthropic_tool(pydantic_model: Type[BaseModel]) -> Dict[str, Any]:
 # Anthropic tool definition for saving officer biographical data
 SAVE_OFFICER_BIO_TOOL = {
     "name": "save_officer_bio",
-    "description": (
-        "Save extracted biographical information about a PLA officer. "
-        "Only call this once you have extracted all available information from the obituary. "
-        "Set fields to null if information is not present in the text. "
-        "Pay special attention to:\n"
-        "- Name in Chinese characters (required)\n"
-        "- Dates in YYYY or YYYY-MM-DD format\n"
-        "- Promotions with rank and date\n"
-        "- Political participations (CCP Congress, CPPCC)\n"
-        "- Notable positions and awards\n"
-        "Use the confidence_score to indicate how confident you are in the extraction (0.0-1.0). "
-        "Use extraction_notes to explain your reasoning or any uncertainties."
-    ),
+    "description": "Save extracted officer bio. Set null for missing fields. Use confidence_score (0-1) and extraction_notes for uncertainties. Call once after extraction.",
     "input_schema": to_anthropic_tool(OfficerBio)
 }
 
