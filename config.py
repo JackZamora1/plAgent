@@ -9,7 +9,7 @@ class Config(BaseSettings):
     """Application configuration using Pydantic BaseSettings."""
 
     # Anthropic API
-    ANTHROPIC_API_KEY: str = Field(..., description="Anthropic API key (required)")
+    ANTHROPIC_API_KEY: str = Field("", description="Anthropic API key (required for agent operations)")
 
     # Database configuration
     DATABASE_URL: Optional[str] = Field(None, description="PostgreSQL connection URL")

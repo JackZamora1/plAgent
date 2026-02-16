@@ -267,6 +267,12 @@ class PLAgentSDK:
         CONFIG.validate_db_credentials(require_db=require_db)
 
         # Initialize Anthropic client
+        if not CONFIG.ANTHROPIC_API_KEY:
+            raise ValueError(
+                "ANTHROPIC_API_KEY is required but not set.\n"
+                "Please add it to your .env file:\n"
+                "  ANTHROPIC_API_KEY=your_api_key_here"
+            )
         self.client = Anthropic(api_key=CONFIG.ANTHROPIC_API_KEY)
         self.model = CONFIG.MODEL_NAME
 
