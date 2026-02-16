@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 REPORT_DIR = Path("output") / "reports"
 HTML_REPORT_PATH = REPORT_DIR / "test_results.html"
 JSON_REPORT_PATH = REPORT_DIR / "test_results.json"
+JUNIT_REPORT_PATH = REPORT_DIR / "junit.xml"
 
 try:
     import pytest
@@ -209,6 +210,7 @@ def run_pytest_suite(
         "--self-contained-html",
         "--json-report",
         f"--json-report-file={JSON_REPORT_PATH}",
+        f"--junitxml={JUNIT_REPORT_PATH}",
     ]
 
     # Add markers for fast mode

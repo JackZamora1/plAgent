@@ -53,15 +53,16 @@ jobs:
       with:
         name: test-results-${{ matrix.python-version }}
         path: |
-          test_results.html
-          test_results.json
+          output/reports/test_results.html
+          output/reports/test_results.json
+          output/reports/junit.xml
 
     # Upload test results to GitHub
     - name: Publish test results
       if: always()
       uses: EnricoMi/publish-unit-test-result-action@v2
       with:
-        files: test_results.json
+        files: output/reports/junit.xml
 
   # Integration tests (only on main branch, requires secrets)
   integration-test:
@@ -97,5 +98,6 @@ jobs:
       with:
         name: integration-test-results
         path: |
-          test_results.html
-          test_results.json
+          output/reports/test_results.html
+          output/reports/test_results.json
+          output/reports/junit.xml
