@@ -1,4 +1,4 @@
-# PLA Agent SDK
+# plAgent
 
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/)
 [![Model](https://img.shields.io/badge/Claude-Sonnet%204.5-7B61FF)](https://www.anthropic.com/)
