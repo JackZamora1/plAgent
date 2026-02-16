@@ -1,6 +1,12 @@
 """Regression tests for source context handling in agentic loop."""
+import os
 from copy import deepcopy
 from types import SimpleNamespace
+
+# These tests mock all API calls, but PLAgentSDK.__init__ validates the key.
+# Ensure a dummy key is present so the SDK can be instantiated.
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    os.environ["ANTHROPIC_API_KEY"] = "test-placeholder"
 
 from agent import PLAgentSDK
 from schema import OfficerBio
