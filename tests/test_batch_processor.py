@@ -45,9 +45,7 @@ def test_single_url_mock():
         # Process using SDK directly (not from URL)
         result = processor.sdk.extract_bio_agentic(
             source_text=source_text,
-            source_url="https://www.news.cn/test/obituary.html",
-            source_type="universal"
-        )
+            source_url="https://test/obituary.html")
 
         if result.success:
             console.print(f"[green]✓ Extraction successful: {result.officer_bio.name}[/green]")

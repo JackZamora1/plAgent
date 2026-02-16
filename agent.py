@@ -4,17 +4,25 @@ from anthropic import Anthropic
 from config import CONFIG
 from schema import OfficerBio, AgentExtractionResult, ToolResult
 from tools import get_all_tools, execute_tool
+from tools.validation_tools import (
+    register_source_context,
+    clear_source_context,
+    execute_validate_dates,
+    execute_verify_information,
+)
 from source_profiles import SourceProfileRegistry, SourceProfile
+from safeguards import validate_source_text_not_fixture
 from rich.console import Console
 from rich.panel import Panel
 from rich.json import JSON
-from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 import json
 import logging
 import time
+from uuid import uuid4
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -236,14 +244,18 @@ class PLAgentSDK:
     - Save extracted biographical data
 
     Features:
-    - Agentic loop with tool use
+    - Single-pass extraction with selective verification
     - Comprehensive logging
     - Token usage tracking
     - Error handling with retries
     - Confidence scoring
     """
 
-    def __init__(self, require_db: bool = False, use_few_shot: bool = True):
+    def __init__(
+        self,
+        require_db: bool = False,
+        use_few_shot: bool = True
+    ):
         """
         Initialize the PLAgentSDK.
 
@@ -258,8 +270,19 @@ class PLAgentSDK:
         self.client = Anthropic(api_key=CONFIG.ANTHROPIC_API_KEY)
         self.model = CONFIG.MODEL_NAME
 
-        # Load all tools from registry
-        self.tools = get_all_tools()
+        # Configure whether DB tools should be available.
+        has_db_creds = bool(CONFIG.DATABASE_URL or (CONFIG.DB_USER and CONFIG.DB_PASSWORD))
+        self.db_tools_enabled = require_db or has_db_creds
+
+        # Load tools; remove DB tools when DB is not configured.
+        all_tools = get_all_tools()
+        if self.db_tools_enabled:
+            self.tools = all_tools
+        else:
+            db_tool_names = {"lookup_existing_officer", "lookup_unit_by_name", "save_to_database"}
+            self.tools = [tool for tool in all_tools if tool.get("name") not in db_tool_names]
+            logger.info("DB tools disabled (no DB configuration detected)")
+
         logger.info(f"Loaded {len(self.tools)} tools for agent")
 
         # Initialize source profile registry
@@ -267,16 +290,20 @@ class PLAgentSDK:
         logger.info(f"Loaded {len(self.profile_registry.list_sources())} source profiles")
 
         # Configuration
-        self.max_iterations = CONFIG.MAX_ITERATIONS
         self.max_retries = 3
         self.retry_delay = 2  # seconds
+        self.extraction_mode = "single_pass"
+        self.max_verify_calls_per_extraction = max(0, CONFIG.MAX_VERIFY_CALLS_PER_EXTRACTION)
 
         # Tracking
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.conversation_turns = 0
+        self._last_messages: List[Dict[str, Any]] = []
 
         # Initialize learning system
+        if not CONFIG.ENABLE_FEW_SHOT_SINGLE_PASS:
+            use_few_shot = False
         self.use_few_shot = use_few_shot and LEARNING_AVAILABLE
         self.learner = None
 
@@ -299,277 +326,77 @@ class PLAgentSDK:
                 self.use_few_shot = False
                 self.learner = None
 
-        logger.info("PLAgentSDK initialized successfully")
+        logger.info(f"PLAgentSDK initialized successfully (mode={self.extraction_mode})")
 
-    def _create_system_prompt(self, profile: SourceProfile) -> str:
-        """
-        Create comprehensive system prompt for Claude customized for source type.
+    def _create_single_pass_system_prompt(self, profile: SourceProfile) -> str:
+        """Create compact system prompt for single-pass extraction."""
+        del profile  # Universal prompt for now.
+        return (
+            "Extract PLA officer biography fields with high precision.\n"
+            "Rules:\n"
+            "- Use only explicitly supported information from source text.\n"
+            "- pinyin_name may be transliterated when not explicit.\n"
+            "- Dates must be YYYY or YYYY-MM-DD.\n"
+            "- Return a single JSON object matching OfficerBio fields.\n"
+            "- Use null for unknown fields.\n"
+            "- Keep lists as arrays; no prose outside JSON.\n"
+        )
 
-        Optionally includes few-shot examples from past successful extractions.
-
-        Args:
-            profile: SourceProfile for the source type being processed
-
-        Returns:
-            System prompt string
-        """
-        base_prompt = f"""You are an expert in extracting PLA officer biographies from {profile.source_description}
-
-# Core Rules
-- Extract ONLY explicitly stated information
-- Generate pinyin_name (transliterate if not in source, e.g., 林炳尧 → Lín Bǐngyáo)
-- Use YYYY or YYYY-MM-DD date format
-- Verify rare fields ({', '.join(profile.rare_fields)}) with verify_information_present before setting null
-- Extract ALL positions (junior to senior) - complete career progression is valuable
-- Use extraction_notes for position-implied ranks (e.g., 班长→下士, 团长→上校), but only add explicit promotions to promotions array
-
-# Workflow
-1. lookup_existing_officer (check duplicates)
-2. Extract bio (focus on {', '.join(profile.common_fields[:3])})
-3. verify_information_present for rare fields
-4. lookup_unit_by_name for unit references
-5. validate_dates (chronological check)
-6. save_officer_bio (once only)
-7. save_to_database (if confidence >= {profile.min_confidence_threshold})
-
-# {profile.display_name} Field Expectations
-{self._format_field_expectations(profile)}
-
-# Source Context
-{profile.extraction_context}
-
-# Confidence Scoring
-- 0.9-1.0: Most expected fields, dates validated
-- 0.7-0.8: Common fields present, minor gaps
-- 0.5-0.6: Limited info, some missing fields
-Threshold for DB save: {profile.min_confidence_threshold}
-
-Common fields for {profile.display_name}: {', '.join(profile.common_fields[:5])}"""
-
-        # Optionally enhance with few-shot examples
-        if self.use_few_shot and self.learner:
-            try:
-                examples = self.learner.get_few_shot_examples(n=2, min_confidence=0.8)
-                if examples:
-                    logger.info(f"Adding {len(examples)} few-shot examples to system prompt")
-                    base_prompt = self.learner.add_to_system_prompt(base_prompt, examples)
-                else:
-                    logger.debug("No few-shot examples available")
-            except Exception as e:
-                logger.warning(f"Failed to add few-shot examples: {e}")
-
-        return base_prompt
-
-    def _format_field_expectations(self, profile: SourceProfile) -> str:
-        """
-        Format field expectations from profile into readable text.
-
-        Args:
-            profile: SourceProfile to format
-
-        Returns:
-            Formatted field expectations string
-        """
-        if not profile.field_expectations:
-            return "No specific field expectations for this source type."
-
-        lines = []
-        for field_name, expectation in profile.field_expectations.items():
-            lines.append(f"- **{field_name}**: {expectation}")
-
-        return "\n".join(lines)
-
-    def _create_user_prompt(self, source_text: str, source_url: str,
-                           profile: SourceProfile) -> str:
-        """
-        Create user prompt customized for source type.
-
-        Args:
-            source_text: The biographical source text
-            source_url: URL of the source
-            profile: SourceProfile for this source type
-
-        Returns:
-            Formatted user prompt
-        """
-        return f"""Extract biographical information from this {profile.display_name}.
-
-Source URL: {source_url}
-Source Type: {profile.source_type}
-
-{profile.display_name} text:
-{source_text}
-
-IMPORTANT: Follow the RECOMMENDED WORKFLOW:
-1. lookup_existing_officer (check for duplicates)
-2. Extract biographical information (focus on common fields: {', '.join(profile.common_fields[:3])})
-3. verify_information_present for ALL rare fields ({', '.join(profile.rare_fields[:3])}, etc.)
-4. validate_dates (ensure chronological consistency)
-5. save_officer_bio (only once, after validation)
-6. save_to_database (optional, if confidence >= {profile.min_confidence_threshold})
-
-Use the tools systematically to ensure high-quality extraction."""
+    def _create_single_pass_user_prompt(self, source_text: str, source_url: str) -> str:
+        """Create compact user prompt for single-pass extraction."""
+        return (
+            "Extract officer biography into JSON with these keys:\n"
+            "name, source_url, source_type, pinyin_name, hometown, birth_date, enlistment_date,\n"
+            "party_membership_date, retirement_date, death_date, congress_participation,\n"
+            "cppcc_participation, promotions, notable_positions, awards, wife_name,\n"
+            "confidence_score, extraction_notes.\n\n"
+            f"source_url: {source_url}\n"
+            "source_type: infer from content (obituary/news_article/wiki/social_media/other).\n\n"
+            f"Source text:\n{source_text}\n\n"
+            "Return JSON only."
+        )
 
     def extract_bio_agentic(
         self,
         source_text: str,
-        source_url: str,
-        source_type: str = "universal"
+        source_url: str
     ) -> AgentExtractionResult:
-        """
-        Extract officer biography using agentic tool use pattern.
+        """Extract officer biography using single-pass mode."""
+        return self._extract_single_pass(source_text=source_text, source_url=source_url)
 
-        This method implements an agentic loop where Claude can use tools iteratively
-        to extract, validate, and save officer biographical data. Works with ANY
-        biographical source - Claude intelligently adapts to the source type.
-
-        Args:
-            source_text: Full text of the biographical source
-            source_url: URL where the source was found
-            source_type: Type of source (default: "universal" for automatic adaptation).
-                        Legacy options: "obituary", "news_article", "wiki"
-
-        Returns:
-            AgentExtractionResult with extraction data and metadata
-
-        Raises:
-            RuntimeError: If max iterations reached or critical error occurs
-            ValueError: If source_type is invalid
-        """
-        logger.info(f"Starting agentic bio extraction (source_type={source_type})")
+    def _extract_single_pass(self, source_text: str, source_url: str) -> AgentExtractionResult:
+        """Single-pass extraction with local validation and gated verification."""
+        logger.info("Starting single-pass bio extraction")
         logger.debug(f"Source text length: {len(source_text)} chars")
+        validate_source_text_not_fixture(source_text, source_url, Path(__file__).parent)
 
-        # Load source profile (defaults to universal)
-        try:
-            profile = self.profile_registry.get(source_type)
-            logger.info(f"Using profile: {profile.display_name}")
-        except ValueError:
-            # Fallback to universal if invalid type specified
-            logger.warning(f"Unknown source type '{source_type}', falling back to universal")
-            profile = self.profile_registry.get("universal")
-            logger.info(f"Using profile: {profile.display_name}")
-
-        # Reset tracking
+        profile = self.profile_registry.get("universal")
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.conversation_turns = 0
 
-        # Initialize conversation with source-specific prompts
-        system_prompt = self._create_system_prompt(profile)
-        user_prompt = self._create_user_prompt(source_text, source_url, profile)
+        source_ref = f"src_{uuid4().hex[:12]}"
+        register_source_context(source_ref, source_text)
 
-        messages = [{
-            "role": "user",
-            "content": user_prompt
-        }]
-
-        # Track tool calls
+        system_prompt = self._create_single_pass_system_prompt(profile)
+        user_prompt = self._create_single_pass_user_prompt(source_text, source_url)
+        messages = [{"role": "user", "content": user_prompt}]
+        self._last_messages = list(messages)
         tool_call_history: List[ToolResult] = []
 
-        # Track whether source text has been sent (for token optimization)
-        source_text_sent = False
+        try:
+            self.conversation_turns += 1
+            response = self._call_api_with_retry(
+                messages=messages,
+                system_prompt=system_prompt,
+                tools_override=[]
+            )
+            self._last_messages.append({"role": "assistant", "content": response.content})
+            self.total_input_tokens += response.usage.input_tokens
+            self.total_output_tokens += response.usage.output_tokens
 
-        # Agentic loop
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console
-        ) as progress:
-            task = progress.add_task("[cyan]Extracting biography...", total=None)
-
-            for iteration in range(self.max_iterations):
-                self.conversation_turns += 1
-                logger.info(f"Iteration {iteration + 1}/{self.max_iterations}")
-
-                # Call Claude API with retries
-                response = self._call_api_with_retry(
-                    messages=messages,
-                    system_prompt=system_prompt
-                )
-
-                # Track tokens
-                self.total_input_tokens += response.usage.input_tokens
-                self.total_output_tokens += response.usage.output_tokens
-
-                # OPTIMIZATION: After first turn, replace source text with reference to save tokens
-                # This prevents sending the full source text in every subsequent API call
-                if not source_text_sent and len(messages) > 0:
-                    source_text_sent = True
-                    # Replace the full source text in the first message with a compact reference
-                    # Claude retains the context from the first call
-                    original_content = messages[0]["content"]
-                    # Keep a short reference instead of full text
-                    messages[0]["content"] = "[Source text provided in initial message - context retained]"
-                    logger.debug(f"Source text optimization: reduced first message from {len(original_content)} to {len(messages[0]['content'])} chars")
-
-                logger.info(
-                    f"Response: stop_reason={response.stop_reason}, "
-                    f"tokens={response.usage.input_tokens}/{response.usage.output_tokens}"
-                )
-
-                # Handle different stop reasons
-                if response.stop_reason == "tool_use":
-                    # Extract tool use blocks
-                    tool_uses = [
-                        block for block in response.content
-                        if block.type == "tool_use"
-                    ]
-
-                    logger.info(f"Claude wants to use {len(tool_uses)} tool(s)")
-
-                    # Execute tools
-                    tool_results = []
-                    for tool_use in tool_uses:
-                        progress.update(
-                            task,
-                            description=f"[cyan]Executing {tool_use.name}..."
-                        )
-
-                        logger.info(f"Executing tool: {tool_use.name}")
-
-                        # Execute tool using registry
-                        result = execute_tool(tool_use.name, tool_use.input)
-
-                        # Track tool call
-                        tool_call_history.append(result)
-
-                        # Prepare tool result for Claude
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tool_use.id,
-                            "content": result.model_dump_json()
-                        })
-
-                    # Append to conversation
-                    messages.append({"role": "assistant", "content": response.content})
-                    messages.append({"role": "user", "content": tool_results})
-
-                elif response.stop_reason == "end_turn":
-                    # Claude is done
-                    logger.info("Claude finished extraction")
-                    progress.update(task, description="[green]✓ Extraction complete")
-                    break
-
-                elif response.stop_reason == "max_tokens":
-                    # Response too long
-                    logger.error("Response exceeded max tokens")
-                    return AgentExtractionResult(
-                        officer_bio=None,
-                        tool_calls=tool_call_history,
-                        conversation_turns=self.conversation_turns,
-                        total_input_tokens=self.total_input_tokens,
-                        total_output_tokens=self.total_output_tokens,
-                        success=False,
-                        error_message="Response exceeded maximum token limit"
-                    )
-
-                else:
-                    logger.warning(f"Unexpected stop reason: {response.stop_reason}")
-                    break
-
-            else:
-                # Max iterations reached
-                logger.error(f"Max iterations ({self.max_iterations}) reached")
+            payload = self._extract_json_payload(response.content)
+            if not payload:
                 return AgentExtractionResult(
                     officer_bio=None,
                     tool_calls=tool_call_history,
@@ -577,22 +404,86 @@ Use the tools systematically to ensure high-quality extraction."""
                     total_input_tokens=self.total_input_tokens,
                     total_output_tokens=self.total_output_tokens,
                     success=False,
-                    error_message=f"Maximum iterations ({self.max_iterations}) reached without completion"
+                    error_message="Single-pass extraction returned no parseable JSON payload"
                 )
 
-        # Store conversation for verbose/replay access
-        self._last_messages = messages
+            payload["source_url"] = source_url
+            payload.setdefault("source_type", "universal")
+            payload.setdefault("confidence_score", 0.0)
 
-        # Extract officer bio from tool call history
-        officer_bio = self._extract_officer_bio_from_history(tool_call_history)
+            save_result = execute_tool("save_officer_bio", payload)
+            tool_call_history.append(save_result)
 
-        if officer_bio:
-            # Calculate enhanced confidence score
+            if not save_result.success:
+                repaired = self._repair_single_pass_payload(
+                    source_text=source_text,
+                    source_url=source_url,
+                    prior_payload=payload,
+                    validation_error=save_result.error or "schema validation failed"
+                )
+                if repaired:
+                    repaired["source_url"] = source_url
+                    repaired.setdefault("source_type", "universal")
+                    repaired.setdefault("confidence_score", 0.0)
+                    save_result = execute_tool("save_officer_bio", repaired)
+                    tool_call_history.append(save_result)
+
+            if not save_result.success:
+                return AgentExtractionResult(
+                    officer_bio=None,
+                    tool_calls=tool_call_history,
+                    conversation_turns=self.conversation_turns,
+                    total_input_tokens=self.total_input_tokens,
+                    total_output_tokens=self.total_output_tokens,
+                    success=False,
+                    error_message=save_result.error or "Failed to validate extracted payload"
+                )
+
+            officer_bio = OfficerBio(**save_result.data["officer_bio"])
+
+            verify_calls = 0
+            for field_name in profile.rare_fields:
+                field_value = getattr(officer_bio, field_name, None)
+                if field_value is None:
+                    continue
+                if verify_calls >= self.max_verify_calls_per_extraction:
+                    break
+
+                terms = profile.get_search_terms(field_name) or [str(field_value)]
+                verify_result = execute_verify_information({
+                    "field_name": field_name,
+                    "search_terms": terms,
+                    "source_ref": source_ref
+                })
+                tool_call_history.append(verify_result)
+                verify_calls += 1
+
+                if verify_result.success and not verify_result.data.get("found"):
+                    setattr(officer_bio, field_name, None)
+                    note = f"{field_name} removed after verification check."
+                    if officer_bio.extraction_notes:
+                        officer_bio.extraction_notes = f"{officer_bio.extraction_notes} {note}"
+                    else:
+                        officer_bio.extraction_notes = note
+
+            date_validation = execute_validate_dates(officer_bio.to_dict(exclude_none=True))
+            tool_call_history.append(date_validation)
+
+            if not date_validation.success:
+                return AgentExtractionResult(
+                    officer_bio=None,
+                    tool_calls=tool_call_history,
+                    conversation_turns=self.conversation_turns,
+                    total_input_tokens=self.total_input_tokens,
+                    total_output_tokens=self.total_output_tokens,
+                    success=False,
+                    error_message=date_validation.error or "Date validation failed"
+                )
+
+            self._normalize_position_order(officer_bio, source_text)
+            self._annotate_inferred_fields(officer_bio, source_text)
             confidence = self._calculate_confidence(officer_bio, tool_call_history)
             officer_bio.confidence_score = confidence
-
-            logger.info(f"Extraction successful: {officer_bio.name}")
-            logger.info(f"Confidence: {confidence:.2f}")
 
             return AgentExtractionResult(
                 officer_bio=officer_bio,
@@ -602,22 +493,81 @@ Use the tools systematically to ensure high-quality extraction."""
                 total_output_tokens=self.total_output_tokens,
                 success=True
             )
-        else:
-            logger.error("No officer bio was saved during extraction")
-            return AgentExtractionResult(
-                officer_bio=None,
-                tool_calls=tool_call_history,
-                conversation_turns=self.conversation_turns,
-                total_input_tokens=self.total_input_tokens,
-                total_output_tokens=self.total_output_tokens,
-                success=False,
-                error_message="Officer bio was not saved - save_officer_bio was never called or failed"
-            )
+        finally:
+            clear_source_context(source_ref)
+
+    def _extract_json_payload(self, response_content: Any) -> Optional[Dict[str, Any]]:
+        """Parse first JSON object found in response text blocks."""
+        text_chunks: List[str] = []
+        for block in response_content:
+            block_type = getattr(block, "type", None)
+            if block_type == "text":
+                text_chunks.append(getattr(block, "text", ""))
+
+        if not text_chunks:
+            return None
+
+        raw_text = "\n".join(text_chunks).strip()
+        if not raw_text:
+            return None
+
+        if raw_text.startswith("```"):
+            raw_text = raw_text.strip("`")
+            raw_text = raw_text.replace("json\n", "", 1).strip()
+
+        try:
+            return json.loads(raw_text)
+        except json.JSONDecodeError:
+            pass
+
+        start = raw_text.find("{")
+        end = raw_text.rfind("}")
+        if start == -1 or end == -1 or start >= end:
+            return None
+
+        candidate = raw_text[start:end + 1]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            return None
+
+    def _repair_single_pass_payload(
+        self,
+        source_text: str,
+        source_url: str,
+        prior_payload: Dict[str, Any],
+        validation_error: str
+    ) -> Optional[Dict[str, Any]]:
+        """Run a compact repair call when initial single-pass payload is invalid."""
+        self.conversation_turns += 1
+        system_prompt = (
+            "Repair invalid OfficerBio JSON. Return ONLY corrected JSON with valid date formats "
+            "(YYYY or YYYY-MM-DD), proper field types, and no extra text."
+        )
+        user_prompt = (
+            f"Source URL: {source_url}\n"
+            f"Validation error:\n{validation_error}\n\n"
+            f"Previous JSON:\n{json.dumps(prior_payload, ensure_ascii=False, indent=2)}\n\n"
+            f"Source text:\n{source_text}\n\n"
+            "Return corrected JSON only."
+        )
+        self._last_messages.append({"role": "user", "content": user_prompt})
+        response = self._call_api_with_retry(
+            messages=[{"role": "user", "content": user_prompt}],
+            system_prompt=system_prompt,
+            tools_override=[]
+        )
+        self._last_messages.append({"role": "assistant", "content": response.content})
+        self.total_input_tokens += response.usage.input_tokens
+        self.total_output_tokens += response.usage.output_tokens
+        return self._extract_json_payload(response.content)
 
     def _call_api_with_retry(
         self,
         messages: List[Dict[str, Any]],
-        system_prompt: str
+        system_prompt: str,
+        tools_override: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: int = 4096
     ) -> Any:
         """
         Call Anthropic API with retry logic for error handling.
@@ -625,6 +575,8 @@ Use the tools systematically to ensure high-quality extraction."""
         Args:
             messages: Conversation messages
             system_prompt: System prompt
+            tools_override: Optional explicit tool set for this call
+            max_tokens: Max output tokens for this call
 
         Returns:
             API response
@@ -636,9 +588,9 @@ Use the tools systematically to ensure high-quality extraction."""
             try:
                 response = self.client.messages.create(
                     model=self.model,
-                    max_tokens=4096,
+                    max_tokens=max_tokens,
                     system=system_prompt,
-                    tools=self.tools,
+                    tools=self.tools if tools_override is None else tools_override,
                     messages=messages
                 )
                 return response
@@ -661,34 +613,71 @@ Use the tools systematically to ensure high-quality extraction."""
                 logger.error(f"API error: {e}")
                 raise RuntimeError(f"Anthropic API error: {e}")
 
-    def _extract_officer_bio_from_history(
-        self,
-        tool_calls: List[ToolResult]
-    ) -> Optional[OfficerBio]:
-        """
-        Extract OfficerBio from tool call history.
+    def _normalize_position_order(self, officer_bio: OfficerBio, source_text: str) -> None:
+        """Normalize notable_positions to source appearance order."""
+        if not officer_bio.notable_positions:
+            return
 
-        Searches for the save_officer_bio tool call and extracts the officer data.
+        indexed_positions = []
+        for i, position in enumerate(officer_bio.notable_positions):
+            idx = source_text.find(position)
+            # Keep stable ordering for non-matches by placing them at the end.
+            order_key = idx if idx >= 0 else len(source_text) + i
+            indexed_positions.append((order_key, i, position))
 
-        Args:
-            tool_calls: List of all tool results from the conversation
+        indexed_positions.sort(key=lambda x: (x[0], x[1]))
+        officer_bio.notable_positions = [p for _, _, p in indexed_positions]
 
-        Returns:
-            OfficerBio if found, None otherwise
-        """
-        # Find save_officer_bio tool call
-        for tool_result in reversed(tool_calls):  # Start from most recent
-            if tool_result.tool_name == "save_officer_bio" and tool_result.success:
-                try:
-                    officer_data = tool_result.data.get('officer_bio')
-                    if officer_data:
-                        # Reconstruct OfficerBio from dict
-                        return OfficerBio(**officer_data)
-                except Exception as e:
-                    logger.error(f"Error reconstructing OfficerBio: {e}")
-                    continue
+    def _is_date_explicit_in_source(self, date_value: str, source_text: str) -> bool:
+        """Check whether a date appears explicitly in source text."""
+        if not date_value:
+            return False
+        if date_value in source_text:
+            return True
 
-        return None
+        if re.match(r"^\d{4}$", date_value):
+            return date_value in source_text
+
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", date_value):
+            year = int(date_value[:4])
+            month = int(date_value[5:7])
+            day = int(date_value[8:10])
+
+            cn_date_patterns = [
+                f"{year}年{month}月{day}日",
+                f"{year}年{month}月{day}号",
+                f"{year}年{month}月{day}",
+            ]
+            if any(p in source_text for p in cn_date_patterns):
+                return True
+
+            en_patterns = [
+                f"{year}-{month:02d}-{day:02d}",
+                f"{year}/{month}/{day}",
+                f"{year}/{month:02d}/{day:02d}",
+            ]
+            if any(p in source_text for p in en_patterns):
+                return True
+
+        return False
+
+    def _annotate_inferred_fields(self, officer_bio: OfficerBio, source_text: str) -> None:
+        """Add extraction note for likely inferred fields."""
+        inferred_fields: List[str] = []
+        for field_name in ("birth_date", "death_date", "retirement_date"):
+            value = getattr(officer_bio, field_name, None)
+            if not value:
+                continue
+            if not self._is_date_explicit_in_source(str(value), source_text):
+                inferred_fields.append(field_name)
+
+        if inferred_fields:
+            note = f"Inferred fields (not explicitly stated verbatim): {', '.join(inferred_fields)}."
+            if officer_bio.extraction_notes:
+                if note not in officer_bio.extraction_notes:
+                    officer_bio.extraction_notes = f"{officer_bio.extraction_notes} {note}"
+            else:
+                officer_bio.extraction_notes = note
 
     def _calculate_confidence(
         self,
@@ -711,35 +700,36 @@ Use the tools systematically to ensure high-quality extraction."""
         Returns:
             Confidence score (0.0-1.0)
         """
-        base_score = officer_bio.confidence_score
-
-        # Bonus for date validation
-        date_validated = any(
-            tc.tool_name == "validate_dates" and tc.success
-            for tc in tool_calls
-        )
-        if date_validated:
-            base_score = min(1.0, base_score + 0.05)
-
-        # Bonus for information verification
-        verification_count = sum(
-            1 for tc in tool_calls
-            if tc.tool_name == "verify_information_present"
-        )
-        if verification_count > 0:
-            base_score = min(1.0, base_score + 0.03)
-
-        # Check field completeness
+        # Deterministic score from extraction completeness and tool outcomes.
         bio_dict = officer_bio.to_dict(exclude_none=True)
         key_fields = [
             'pinyin_name', 'hometown', 'birth_date', 'enlistment_date',
             'party_membership_date', 'promotions', 'notable_positions'
         ]
         populated = sum(1 for field in key_fields if field in bio_dict)
-        completeness_score = populated / len(key_fields)
+        completeness_score = populated / len(key_fields) if key_fields else 0.0
 
-        # Weighted average
-        final_score = (base_score * 0.7) + (completeness_score * 0.3)
+        date_validation_score = 1.0 if any(
+            tc.tool_name == "validate_dates" and tc.success for tc in tool_calls
+        ) else 0.0
+
+        verify_calls = [tc for tc in tool_calls if tc.tool_name == "verify_information_present"]
+        if verify_calls:
+            verification_score = sum(1 for tc in verify_calls if tc.success) / len(verify_calls)
+        else:
+            verification_score = 0.5
+
+        if tool_calls:
+            tool_success_ratio = sum(1 for tc in tool_calls if tc.success) / len(tool_calls)
+        else:
+            tool_success_ratio = 0.0
+
+        final_score = (
+            completeness_score * 0.55
+            + date_validation_score * 0.25
+            + verification_score * 0.10
+            + tool_success_ratio * 0.10
+        )
 
         return round(final_score, 2)
 

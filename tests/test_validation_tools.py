@@ -4,7 +4,9 @@ from tools.validation_tools import (
     VALIDATE_DATES_TOOL,
     VERIFY_INFORMATION_TOOL,
     execute_validate_dates,
-    execute_verify_information
+    execute_verify_information,
+    register_source_context,
+    clear_source_context,
 )
 from rich.console import Console
 from rich.panel import Panel
@@ -156,9 +158,9 @@ def test_verify_information_tool_definition():
     assert 'properties' in schema
     assert 'field_name' in schema['properties']
     assert 'search_terms' in schema['properties']
-    assert 'obituary_text' in schema['properties']
+    assert 'source_ref' in schema['properties']
     assert 'required' in schema
-    assert set(schema['required']) == {'field_name', 'search_terms', 'obituary_text'}
+    assert set(schema['required']) == {'field_name', 'search_terms', 'source_ref'}
 
     console.print("[green]✓ Tool definition validated[/green]")
     console.print(f"\n[bold]Tool Name:[/bold] {VERIFY_INFORMATION_TOOL['name']}")
@@ -177,13 +179,17 @@ def test_execute_verify_information_found():
     林炳尧是福建晋江人，1961年入伍，1964年加入中国共产党。他的夫人是张三。
     """
 
-    tool_input = {
-        "field_name": "wife_name",
-        "search_terms": ["夫人", "妻子", "配偶"],
-        "obituary_text": obituary
-    }
-
-    result = execute_verify_information(tool_input)
+    source_ref = "test_ref_found"
+    register_source_context(source_ref, obituary)
+    try:
+        tool_input = {
+            "field_name": "wife_name",
+            "search_terms": ["夫人", "妻子", "配偶"],
+            "source_ref": source_ref
+        }
+        result = execute_verify_information(tool_input)
+    finally:
+        clear_source_context(source_ref)
 
     assert result.success, "Should succeed when information is found"
     assert result.data['found'] is True
@@ -209,13 +215,17 @@ def test_execute_verify_information_not_found():
     新华社厦门9月1日电 副大军区职退休干部、原南京军区副司令员林炳尧同志，因病医治无效，于8月18日在福建厦门逝世，享年82岁。
     """
 
-    tool_input = {
-        "field_name": "wife_name",
-        "search_terms": ["夫人", "妻子", "配偶"],
-        "obituary_text": obituary
-    }
-
-    result = execute_verify_information(tool_input)
+    source_ref = "test_ref_not_found"
+    register_source_context(source_ref, obituary)
+    try:
+        tool_input = {
+            "field_name": "wife_name",
+            "search_terms": ["夫人", "妻子", "配偶"],
+            "source_ref": source_ref
+        }
+        result = execute_verify_information(tool_input)
+    finally:
+        clear_source_context(source_ref)
 
     assert result.success, "Should still succeed even when not found"
     assert result.data['found'] is False
@@ -237,13 +247,17 @@ def test_execute_verify_information_retirement():
     林炳尧是福建晋江人，1961年入伍，1964年加入中国共产党，2005年退休。
     """
 
-    tool_input = {
-        "field_name": "retirement_date",
-        "search_terms": ["退休", "离休", "退役"],
-        "obituary_text": obituary
-    }
-
-    result = execute_verify_information(tool_input)
+    source_ref = "test_ref_retire"
+    register_source_context(source_ref, obituary)
+    try:
+        tool_input = {
+            "field_name": "retirement_date",
+            "search_terms": ["退休", "离休", "退役"],
+            "source_ref": source_ref
+        }
+        result = execute_verify_information(tool_input)
+    finally:
+        clear_source_context(source_ref)
 
     assert result.success
     assert result.data['found'] is True

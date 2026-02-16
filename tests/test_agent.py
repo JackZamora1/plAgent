@@ -18,6 +18,7 @@ import pytest
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="urllib3")
 
 console = Console()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_single_extraction() -> AgentExtractionResult:
@@ -31,7 +32,7 @@ def test_single_extraction() -> AgentExtractionResult:
 
     try:
         # Load test obituary
-        test_file = Path(__file__).parent / "data" / "test_obituary.txt"
+        test_file = PROJECT_ROOT / "data" / "test_obituary.txt"
         if not test_file.exists():
             console.print(f"[red]✗ Test file not found: {test_file}[/red]")
             raise FileNotFoundError(f"Test file not found: {test_file}")
@@ -49,15 +50,13 @@ def test_single_extraction() -> AgentExtractionResult:
         console.print("[cyan]Starting agentic extraction (universal profile)...[/cyan]")
         result = sdk.extract_bio_agentic(
             source_text=source_text,
-            source_url="https://www.news.cn/test/obituary.html",
-            source_type="universal"
-        )
+            source_url="https://test/obituary.html")
 
         # Print extraction summary
         ConversationPrinter.print_extraction_summary(result)
 
         # Save result
-        output_file = Path(__file__).parent / "output" / "test_extraction.json"
+        output_file = PROJECT_ROOT / "output" / "test_extraction.json"
         output_file.parent.mkdir(exist_ok=True)
 
         with open(output_file, 'w', encoding='utf-8') as f:
@@ -79,6 +78,16 @@ def test_single_extraction() -> AgentExtractionResult:
         return result
 
     except Exception as e:
+        error_text = str(e).lower()
+        connection_indicators = (
+            "connection error",
+            "api connection",
+            "nodename nor servname",
+            "name resolution",
+            "timed out",
+        )
+        if any(token in error_text for token in connection_indicators):
+            pytest.skip(f"Skipping API integration test due to connectivity issue: {e}")
         console.print(f"\n[bold red]✗ Test 1 FAILED with exception: {e}[/bold red]")
         import traceback
         console.print(traceback.format_exc())

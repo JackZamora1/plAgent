@@ -3,6 +3,23 @@ from typing import Dict, List, Any, Optional
 from schema import ToolResult
 import re
 
+_SOURCE_CONTEXTS: Dict[str, str] = {}
+
+
+def register_source_context(source_ref: str, source_text: str) -> None:
+    """Register source text by reference for verification lookups."""
+    _SOURCE_CONTEXTS[source_ref] = source_text
+
+
+def clear_source_context(source_ref: str) -> None:
+    """Clear source text for a completed extraction."""
+    _SOURCE_CONTEXTS.pop(source_ref, None)
+
+
+def resolve_source_context(source_ref: str) -> Optional[str]:
+    """Resolve source text from a source reference."""
+    return _SOURCE_CONTEXTS.get(source_ref)
+
 
 def _parse_year(date_str: Optional[str]) -> Optional[int]:
     """
@@ -258,12 +275,12 @@ VERIFY_INFORMATION_TOOL = {
                 "items": {"type": "string"},
                 "description": "List of Chinese terms to search for (e.g., ['妻子', '夫人', '配偶'] for wife)"
             },
-            "obituary_text": {
+            "source_ref": {
                 "type": "string",
-                "description": "The full source text to search in"
+                "description": "Opaque source reference registered by SDK for current extraction"
             }
         },
-        "required": ["field_name", "search_terms", "obituary_text"]
+        "required": ["field_name", "search_terms", "source_ref"]
     }
 }
 
@@ -280,7 +297,7 @@ def execute_verify_information(tool_input: Dict[str, Any]) -> ToolResult:
         tool_input: Dictionary containing:
             - field_name: str - Name of field being verified
             - search_terms: List[str] - Chinese terms to search for
-            - obituary_text: str - Full source text (parameter name kept for compatibility)
+            - source_ref: str - Source reference for SDK-registered source text
 
     Returns:
         ToolResult with:
@@ -291,7 +308,7 @@ def execute_verify_information(tool_input: Dict[str, Any]) -> ToolResult:
         >>> tool_input = {
         ...     "field_name": "wife_name",
         ...     "search_terms": ["妻子", "夫人", "配偶"],
-        ...     "obituary_text": "林炳尧同志的夫人是张三..."
+        ...     "source_ref": "src_abc123"
         ... }
         >>> result = execute_verify_information(tool_input)
         >>> print(result.data['excerpt'])
@@ -306,14 +323,17 @@ def execute_verify_information(tool_input: Dict[str, Any]) -> ToolResult:
     try:
         field_name = tool_input.get('field_name', 'unknown')
         search_terms = tool_input.get('search_terms', [])
-        obituary_text = tool_input.get('obituary_text', '')  # Parameter name kept for compatibility
+        source_ref = tool_input.get('source_ref')
+        source_text = ""
+        if source_ref:
+            source_text = resolve_source_context(source_ref) or ""
 
-        if not obituary_text:
+        if not source_text:
             return ToolResult(
                 tool_name="verify_information_present",
                 success=False,
-                data={"field_name": field_name},
-                error="No source text provided"
+                data={"field_name": field_name, "source_ref": source_ref},
+                error="No source text available for verification (missing or invalid source_ref)"
             )
 
         if not search_terms:
@@ -331,7 +351,7 @@ def execute_verify_information(tool_input: Dict[str, Any]) -> ToolResult:
         for term in search_terms:
             # Find all occurrences of this term
             pattern = re.escape(term)
-            matches = list(re.finditer(pattern, obituary_text, re.IGNORECASE))
+            matches = list(re.finditer(pattern, source_text, re.IGNORECASE))
 
             for match in matches:
                 start = match.start()
@@ -339,14 +359,14 @@ def execute_verify_information(tool_input: Dict[str, Any]) -> ToolResult:
 
                 # Get context (50 chars before and after)
                 context_start = max(0, start - 50)
-                context_end = min(len(obituary_text), end + 50)
+                context_end = min(len(source_text), end + 50)
 
-                excerpt = obituary_text[context_start:context_end]
+                excerpt = source_text[context_start:context_end]
 
                 # Add ellipsis if truncated
                 if context_start > 0:
                     excerpt = "..." + excerpt
-                if context_end < len(obituary_text):
+                if context_end < len(source_text):
                     excerpt = excerpt + "..."
 
                 found_excerpts.append({

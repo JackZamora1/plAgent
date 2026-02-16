@@ -9,11 +9,12 @@ Showcases the universal agentic extraction system with:
 - Database integration
 - Beautiful Rich formatting
 
-Usage: python demo.py
+Usage: python scripts/demo.py
 """
 
 import time
 import logging
+import sys
 from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
@@ -23,6 +24,11 @@ from rich.live import Live
 from rich.layout import Layout
 from rich.text import Text
 from rich import box
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from agent import PLAgentSDK, ConversationPrinter
 from tools.extraction_tools import extract_text_from_file
 from tools.database_tools import execute_lookup_officer
@@ -69,7 +75,7 @@ def load_test_obituary() -> tuple[str, str]:
     )
 
     # Load obituary
-    test_file = Path(__file__).parent / "data" / "test_obituary.txt"
+    test_file = PROJECT_ROOT / "data" / "test_obituary.txt"
     source_text = extract_text_from_file(str(test_file))
     source_url = "https://www.news.cn/mil/2025-01/15/c_test_obituary.htm"
 
@@ -154,9 +160,8 @@ def run_extraction_with_monitoring(sdk, source_text, source_url):
     # Run extraction with universal profile
     result = sdk.extract_bio_agentic(
         source_text=source_text,
-        source_url=source_url,
-        source_type="universal"
-    )
+        source_url=source_url
+        )
 
     console.print()
     console.print("[green]✓ Extraction Complete![/green]")

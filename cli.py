@@ -9,26 +9,18 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Optional, List, Dict, Any
-from datetime import datetime
-from collections import Counter
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.syntax import Syntax
-from rich.progress import track
 from rich import box
 from rich.logging import RichHandler
 from rich.prompt import Prompt
-from rich.live import Live
-from rich.spinner import Spinner
 
 from agent import PLAgentSDK, ConversationPrinter
 from batch_processor import BatchProcessor
-from schema import AgentExtractionResult, OfficerBio
+from schema import OfficerBio
 from tools.extraction_tools import extract_text_from_file
-from config import CONFIG
 
 console = Console()
 
@@ -110,13 +102,11 @@ def cmd_extract(args):
 
         print_success(f"Fetched {len(source_text)} characters")
 
-        # Extract biography (universal profile - Claude will identify source type)
+        # Extract biography
         console.print(f"\n[cyan]Extracting biography...[/cyan]")
-        console.print(f"[dim]Using universal extraction (Claude will adapt to source type)[/dim]")
         result = sdk.extract_bio_agentic(
             source_text=source_text,
-            source_url=args.url,
-            source_type="universal"
+            source_url=args.url
         )
 
         # Check result
@@ -183,6 +173,8 @@ def cmd_extract(args):
             # Get messages from SDK's last conversation
             if hasattr(sdk, '_last_messages'):
                 ConversationPrinter.print_conversation(sdk._last_messages)
+            else:
+                print_warning("No conversation details available")
 
         return 0
 
@@ -224,16 +216,8 @@ def cmd_batch(args):
         )
         print_success("Processor initialized")
 
-        # Handle parallelism
-        if args.parallel and args.parallel > 1:
-            print_warning(f"Parallel processing ({args.parallel} workers) not yet implemented")
-            print_warning("Processing sequentially instead")
-            # TODO: Implement parallel processing
-
-        # Process URLs with universal extraction (Claude adapts to each source)
-        console.print(f"[dim]Using universal extraction - Claude will adapt to each source type[/dim]")
-        results = processor.process_from_file(args.file, save_to_db=args.save_db,
-                                             source_type="universal")
+        # Process URLs
+        results = processor.process_from_file(args.file, save_to_db=args.save_db)
 
         if not results:
             print_warning("No results to process")
@@ -257,149 +241,6 @@ def cmd_batch(args):
     except Exception as e:
         print_error(f"Batch processing failed: {e}")
         logger.exception("Batch processing error")
-        return 1
-
-
-# ============================================================================
-# Command: test
-# ============================================================================
-
-def cmd_test(args):
-    """
-    Run test suite.
-
-    Args:
-        args: Parsed command-line arguments
-    """
-    print_header("Test Suite", "Running extraction tests")
-
-    logger = logging.getLogger(__name__)
-
-    try:
-        # Determine test file
-        if args.obituary:
-            test_file = Path(args.obituary)
-            if not test_file.exists():
-                print_error(f"Test file not found: {test_file}")
-                return 1
-        else:
-            test_file = Path("data/test_obituary.txt")
-            if not test_file.exists():
-                print_error("Default test file not found: data/test_obituary.txt")
-                return 1
-
-        console.print(f"\n[cyan]Using test file: {test_file}[/cyan]")
-
-        # Load obituary
-        source_text = extract_text_from_file(str(test_file))
-        print_success(f"Loaded {len(source_text)} characters")
-
-        # Initialize SDK
-        console.print("\n[cyan]Initializing SDK...[/cyan]")
-        sdk = PLAgentSDK(require_db=False)
-        print_success("SDK initialized")
-
-        # Run extraction
-        console.print("\n[cyan]Running extraction test...[/cyan]")
-        console.print("[dim]Using universal extraction (Claude adapts to source)[/dim]")
-        result = sdk.extract_bio_agentic(
-            source_text=source_text,
-            source_url="https://test/obituary.html",
-            source_type="universal"
-        )
-
-        # Analyze results
-        console.print("\n[bold cyan]Test Results:[/bold cyan]\n")
-
-        tests = []
-
-        # Test 1: Extraction succeeded
-        tests.append(("Extraction Success", result.success, None))
-
-        if result.success and result.officer_bio:
-            officer = result.officer_bio
-
-            # Test 2: Has required fields
-            has_required = bool(officer.name and officer.source_url)
-            tests.append(("Required Fields", has_required, "name, source_url"))
-
-            # Test 3: Confidence score
-            good_confidence = officer.confidence_score >= 0.8
-            tests.append((
-                "Confidence Score",
-                good_confidence,
-                f"{officer.confidence_score:.2f} {'≥' if good_confidence else '<'} 0.8"
-            ))
-
-            # Test 4: Has biographical data
-            has_bio_data = any([
-                officer.birth_date,
-                officer.enlistment_date,
-                officer.promotions,
-                officer.notable_positions
-            ])
-            tests.append(("Biographical Data", has_bio_data, None))
-
-            # Test 5: Tool usage
-            tool_count = len(result.tool_calls)
-            good_tools = tool_count >= 3
-            tests.append((
-                "Tool Usage",
-                good_tools,
-                f"{tool_count} tools used"
-            ))
-
-            # Test 6: Token efficiency
-            total_tokens = result.get_total_tokens()
-            efficient = total_tokens < 100000
-            tests.append((
-                "Token Efficiency",
-                efficient,
-                f"{total_tokens:,} tokens"
-            ))
-
-        else:
-            # If extraction failed, mark all other tests as failed
-            for test_name in [
-                "Required Fields",
-                "Confidence Score",
-                "Biographical Data",
-                "Tool Usage",
-                "Token Efficiency"
-            ]:
-                tests.append((test_name, False, result.error_message))
-
-        # Display test results
-        test_table = Table(show_header=True, header_style="bold cyan", box=box.ROUNDED)
-        test_table.add_column("Test", style="cyan", width=25)
-        test_table.add_column("Status", style="white", width=10)
-        test_table.add_column("Details", style="dim", width=40)
-
-        for test_name, passed, details in tests:
-            status = "[green]✓ PASS[/green]" if passed else "[red]✗ FAIL[/red]"
-            test_table.add_row(test_name, status, details or "")
-
-        console.print(test_table)
-
-        # Summary
-        passed_count = sum(1 for _, passed, _ in tests if passed)
-        total_count = len(tests)
-
-        console.print(f"\n[bold]Results: {passed_count}/{total_count} tests passed[/bold]")
-
-        if passed_count == total_count:
-            print_success("All tests passed!")
-            return 0
-        else:
-            print_warning(f"{total_count - passed_count} test(s) failed")
-            return 1
-
-    except KeyboardInterrupt:
-        print_warning("Interrupted by user")
-        return 1
-    except Exception as e:
-        print_error(f"Test failed: {e}")
-        logger.exception("Test error")
         return 1
 
 
@@ -525,236 +366,6 @@ def cmd_validate(args):
 
 
 # ============================================================================
-# Command: replay
-# ============================================================================
-
-def cmd_replay(args):
-    """
-    Replay saved extraction conversation.
-
-    Args:
-        args: Parsed command-line arguments
-    """
-    print_header("Replay Conversation", f"File: {args.json}")
-
-    logger = logging.getLogger(__name__)
-
-    try:
-        # Load JSON file
-        json_path = Path(args.json)
-        if not json_path.exists():
-            print_error(f"File not found: {args.json}")
-            return 1
-
-        console.print(f"\n[cyan]Loading extraction from {json_path}...[/cyan]")
-        with open(json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        # Parse result
-        result = AgentExtractionResult(**data)
-        print_success(f"Loaded extraction: {result.officer_bio.name if result.officer_bio else 'N/A'}")
-
-        # Show basic info
-        console.print("\n[bold cyan]Extraction Summary:[/bold cyan]")
-        console.print(f"  Status: {'Success' if result.success else 'Failed'}")
-        console.print(f"  Conversation Turns: {result.conversation_turns}")
-        console.print(f"  Tool Calls: {len(result.tool_calls)}")
-        console.print(f"  Total Tokens: {result.get_total_tokens():,}")
-
-        # Show tool calls
-        if result.tool_calls:
-            console.print("\n[bold cyan]Tool Call Sequence:[/bold cyan]\n")
-
-            tool_table = Table(show_header=True, header_style="bold cyan", box=box.ROUNDED)
-            tool_table.add_column("#", style="dim", width=4)
-            tool_table.add_column("Tool", style="cyan", width=30)
-            tool_table.add_column("Status", style="white", width=10)
-            tool_table.add_column("Timestamp", style="dim", width=20)
-
-            for i, tool in enumerate(result.tool_calls, 1):
-                status = "[green]✓[/green]" if tool.success else "[red]✗[/red]"
-                timestamp = tool.timestamp.strftime("%H:%M:%S") if hasattr(tool.timestamp, 'strftime') else str(tool.timestamp)
-                tool_table.add_row(str(i), tool.tool_name, status, timestamp)
-
-            console.print(tool_table)
-
-        # Show extracted data
-        if result.officer_bio:
-            console.print("\n[bold cyan]Extracted Officer Bio:[/bold cyan]\n")
-
-            # Display as formatted JSON
-            bio_json = result.officer_bio.to_json(exclude_none=True, indent=2)
-            syntax = Syntax(bio_json, "json", theme="monokai", line_numbers=False)
-            console.print(syntax)
-
-        # Show error if failed
-        if not result.success:
-            console.print("\n[bold red]Error Message:[/bold red]")
-            console.print(f"  {result.error_message}")
-
-        return 0
-
-    except Exception as e:
-        print_error(f"Replay failed: {e}")
-        logger.exception("Replay error")
-        return 1
-
-
-# ============================================================================
-# Command: stats
-# ============================================================================
-
-def cmd_stats(args):
-    """
-    Analyze all extractions in directory.
-
-    Args:
-        args: Parsed command-line arguments
-    """
-    print_header("Aggregate Statistics", f"Directory: {args.dir}")
-
-    logger = logging.getLogger(__name__)
-
-    try:
-        # Find all extraction JSON files
-        output_dir = Path(args.dir)
-        if not output_dir.exists():
-            print_error(f"Directory not found: {args.dir}")
-            return 1
-
-        json_files = list(output_dir.glob("*.json"))
-
-        # Exclude review files and batch reports
-        json_files = [
-            f for f in json_files
-            if not f.name.startswith("REVIEW_") and not f.name.startswith("batch_report")
-        ]
-
-        if not json_files:
-            print_warning(f"No extraction files found in {args.dir}")
-            return 1
-
-        console.print(f"\n[cyan]Found {len(json_files)} extraction files[/cyan]")
-
-        # Collect statistics
-        results = []
-        officers = []
-        tools_used = []
-        errors = []
-
-        for json_file in track(json_files, description="Analyzing..."):
-            try:
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-
-                result = AgentExtractionResult(**data)
-                results.append(result)
-
-                if result.officer_bio:
-                    officers.append(result.officer_bio)
-
-                for tool in result.tool_calls:
-                    tools_used.append(tool.tool_name)
-
-                if not result.success and result.error_message:
-                    errors.append(result.error_message)
-
-            except Exception as e:
-                logger.debug(f"Skipping {json_file}: {e}")
-
-        # Calculate statistics
-        total_count = len(results)
-        successful_count = sum(1 for r in results if r.success)
-        failed_count = total_count - successful_count
-
-        # Confidence scores
-        confidence_scores = [o.confidence_score for o in officers]
-        avg_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0
-
-        # Token usage
-        total_tokens = sum(r.get_total_tokens() for r in results)
-        avg_tokens = total_tokens / total_count if total_count > 0 else 0
-
-        # Tool usage
-        tool_counter = Counter(tools_used)
-
-        # Date completeness
-        has_birth_date = sum(1 for o in officers if o.birth_date)
-        has_death_date = sum(1 for o in officers if o.death_date)
-        has_promotions = sum(1 for o in officers if o.promotions)
-
-        # Display statistics
-        console.print("\n[bold cyan]Overall Statistics:[/bold cyan]\n")
-
-        overall_table = Table(show_header=True, header_style="bold cyan", box=box.ROUNDED)
-        overall_table.add_column("Metric", style="cyan", width=30)
-        overall_table.add_column("Value", style="white", width=20)
-
-        overall_table.add_row("Total Extractions", str(total_count))
-        overall_table.add_row("Successful", f"{successful_count} ({successful_count/total_count*100:.1f}%)")
-        overall_table.add_row("Failed", f"{failed_count} ({failed_count/total_count*100:.1f}%)")
-        overall_table.add_row("", "")
-        overall_table.add_row("Average Confidence", f"{avg_confidence:.3f}")
-        overall_table.add_row("Min Confidence", f"{min(confidence_scores):.3f}" if confidence_scores else "N/A")
-        overall_table.add_row("Max Confidence", f"{max(confidence_scores):.3f}" if confidence_scores else "N/A")
-        overall_table.add_row("", "")
-        overall_table.add_row("Total Tokens", f"{total_tokens:,}")
-        overall_table.add_row("Avg Tokens/Extraction", f"{avg_tokens:,.0f}")
-
-        console.print(overall_table)
-
-        # Data completeness
-        console.print("\n[bold cyan]Data Completeness:[/bold cyan]\n")
-
-        completeness_table = Table(show_header=True, header_style="bold cyan", box=box.ROUNDED)
-        completeness_table.add_column("Field", style="cyan", width=30)
-        completeness_table.add_column("Present", style="white", width=20)
-
-        officer_count = len(officers)
-        if officer_count > 0:
-            completeness_table.add_row("Birth Date", f"{has_birth_date}/{officer_count} ({has_birth_date/officer_count*100:.1f}%)")
-            completeness_table.add_row("Death Date", f"{has_death_date}/{officer_count} ({has_death_date/officer_count*100:.1f}%)")
-            completeness_table.add_row("Promotions", f"{has_promotions}/{officer_count} ({has_promotions/officer_count*100:.1f}%)")
-
-        console.print(completeness_table)
-
-        # Tool usage
-        console.print("\n[bold cyan]Tool Usage:[/bold cyan]\n")
-
-        tool_table = Table(show_header=True, header_style="bold cyan", box=box.ROUNDED)
-        tool_table.add_column("Tool", style="cyan", width=35)
-        tool_table.add_column("Count", style="white", width=15)
-
-        for tool_name, count in tool_counter.most_common():
-            tool_table.add_row(tool_name, str(count))
-
-        console.print(tool_table)
-
-        # Common errors
-        if errors:
-            console.print("\n[bold cyan]Common Errors:[/bold cyan]\n")
-            error_counter = Counter(errors)
-
-            error_table = Table(show_header=True, header_style="bold cyan", box=box.ROUNDED)
-            error_table.add_column("Error", style="red", width=60)
-            error_table.add_column("Count", style="white", width=10)
-
-            for error, count in error_counter.most_common(5):
-                error_short = error[:57] + "..." if len(error) > 60 else error
-                error_table.add_row(error_short, str(count))
-
-            console.print(error_table)
-
-        print_success(f"Analyzed {total_count} extractions")
-        return 0
-
-    except Exception as e:
-        print_error(f"Stats analysis failed: {e}")
-        logger.exception("Stats error")
-        return 1
-
-
-# ============================================================================
 # Command: interactive
 # ============================================================================
 
@@ -796,7 +407,6 @@ def cmd_interactive(args):
     console.print("  [yellow]batch <file>[/yellow]       - Batch process URLs")
     console.print("\n[bold cyan]🔍 Analysis Commands:[/bold cyan]")
     console.print("  [yellow]validate <file>[/yellow]    - Validate saved extraction")
-    console.print("  [yellow]replay <file>[/yellow]      - Replay conversation")
     console.print("  [yellow]search <query>[/yellow]     - Search output files")
     console.print("\n[bold cyan]🛠️  System Commands:[/bold cyan]")
     console.print("  [yellow]run-tests[/yellow]          - Run test suite")
@@ -854,7 +464,6 @@ def cmd_interactive(args):
                 analysis_table.add_column("Command", style="yellow", width=20)
                 analysis_table.add_column("Description", style="white", width=50)
                 analysis_table.add_row("validate <file>", "Re-validate saved extraction")
-                analysis_table.add_row("replay <file>", "Replay conversation from file")
                 analysis_table.add_row("search <query>", "Search output files by name")
                 console.print(analysis_table)
 
@@ -909,14 +518,11 @@ def cmd_interactive(args):
 
                     print_success(f"Fetched {len(source_text)} characters")
                     console.print("[dim]Claude will identify source type and adapt expectations[/dim]")
-
-                    # Extract with universal profile
                     console.print("\n[cyan]Extracting biography (watch tool calls)...[/cyan]\n")
 
                     result = sdk.extract_bio_agentic(
                         source_text=source_text,
-                        source_url=url,
-                        source_type="universal"  # Universal extraction
+                        source_url=url
                     )
 
                     # Update stats
@@ -960,7 +566,6 @@ def cmd_interactive(args):
                         else:
                             console.print("  [yellow]• Low confidence - Review recommended[/yellow]")
                         console.print(f"  [cyan]• Validate: python cli.py validate --json {output_file}[/cyan]")
-                        console.print(f"  [cyan]• Replay: python cli.py replay --json {output_file}[/cyan]")
 
                     else:
                         print_error(f"Extraction failed: {result.error_message}")
@@ -997,8 +602,7 @@ def cmd_interactive(args):
 
                     result = sdk.extract_bio_agentic(
                         source_text=source_text,
-                        source_url="https://interactive/paste",
-                        source_type="universal"  # Universal extraction
+                        source_url="https://interactive/paste"
                     )
 
                     # Update stats
@@ -1049,13 +653,11 @@ def cmd_interactive(args):
                     print_success(f"Loaded {len(source_text)} characters")
 
                     console.print("[cyan]Extracting...[/cyan]")
-                    console.print("[dim]Using universal extraction[/dim]\n")
 
                     result = sdk.extract_bio_agentic(
                         source_text=source_text,
-                        source_url="https://interactive/test",
-                        source_type="universal"
-                    )
+                        source_url="https://interactive/test"
+        )
 
                     # Update stats
                     session_stats['extractions'] += 1
@@ -1110,9 +712,9 @@ def cmd_interactive(args):
                     import subprocess
                     import sys
 
-                    # Run demo.py in same Python environment
+                    # Run scripts/demo.py in same Python environment
                     result = subprocess.run(
-                        [sys.executable, "demo.py"],
+                        [sys.executable, "scripts/demo.py"],
                         cwd=Path(__file__).parent,
                         check=False
                     )
@@ -1123,7 +725,7 @@ def cmd_interactive(args):
                         console.print(f"\n[yellow]Demo exited with code {result.returncode}[/yellow]")
 
                 except FileNotFoundError:
-                    print_error("demo.py not found in current directory")
+                    print_error("scripts/demo.py not found in current directory")
                     console.print("[dim]Make sure you're in the pla-agent-sdk directory[/dim]")
                 except KeyboardInterrupt:
                     console.print("\n[yellow]Demo interrupted by user[/yellow]")
@@ -1159,10 +761,10 @@ def cmd_interactive(args):
                     console.print()
                     if result.returncode == 0:
                         console.print("[green]✓ All tests passed![/green]")
-                        console.print("[dim]View detailed results: open test_results.html[/dim]")
+                        console.print("[dim]View detailed results: open output/reports/test_results.html[/dim]")
                     else:
                         console.print("[yellow]⚠ Some tests failed[/yellow]")
-                        console.print("[dim]Check test_results.html for details[/dim]")
+                        console.print("[dim]Check output/reports/test_results.html for details[/dim]")
 
                 except FileNotFoundError:
                     print_error("run_all_tests.py not found")
@@ -1236,53 +838,6 @@ def cmd_interactive(args):
                 except Exception as e:
                     print_error(f"Validation failed: {e}")
 
-            elif cmd == 'replay':
-                if not args_str:
-                    print_error("Usage: replay <json_file>")
-                    console.print("[dim]Example: replay output/林炳尧_20260212.json[/dim]")
-                    continue
-
-                json_file = Path(args_str.strip())
-
-                if not json_file.exists():
-                    print_error(f"File not found: {json_file}")
-                    continue
-
-                console.print(f"\n[cyan]Replaying: {json_file.name}[/cyan]\n")
-
-                try:
-                    with open(json_file, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-
-                    # Show summary
-                    console.print("[bold]Extraction Summary:[/bold]")
-                    console.print(f"  Success: {'✓' if data.get('success') else '✗'}")
-                    console.print(f"  Turns: {data.get('conversation_turns', 0)}")
-                    console.print(f"  Tool Calls: {len(data.get('tool_calls', []))}")
-                    console.print(f"  Tokens: {data.get('total_input_tokens', 0) + data.get('total_output_tokens', 0):,}")
-                    console.print()
-
-                    # Show tool calls
-                    if data.get('tool_calls'):
-                        console.print("[bold cyan]Tool Call Sequence:[/bold cyan]\n")
-
-                        for idx, tc in enumerate(data['tool_calls'], 1):
-                            status = "✓" if tc.get('success') else "✗"
-                            color = "green" if tc.get('success') else "red"
-                            console.print(f"  [{color}]{status}[/{color}] {idx}. {tc.get('tool_name')}")
-
-                    # Show officer bio
-                    if data.get('officer_bio'):
-                        console.print()
-                        console.print("[bold cyan]Extracted Officer Bio:[/bold cyan]\n")
-                        officer_preview = json.dumps(data['officer_bio'], indent=2, ensure_ascii=False)
-                        console.print(officer_preview[:500] + "..." if len(officer_preview) > 500 else officer_preview)
-
-                except json.JSONDecodeError:
-                    print_error("Invalid JSON file")
-                except Exception as e:
-                    print_error(f"Replay error: {e}")
-
             elif cmd == 'batch':
                 if not args_str:
                     print_error("Usage: batch <url_file>")
@@ -1309,7 +864,7 @@ def cmd_interactive(args):
                     from batch_processor import BatchProcessor
 
                     processor = BatchProcessor(require_db=False)
-                    results = processor.process_file(str(url_file))
+                    results = processor.process_from_file(str(url_file), save_to_db=False)
 
                     # Update session stats
                     for result in results:
@@ -1344,7 +899,6 @@ def cmd_interactive(args):
                 api_display = f"{api_key[:12]}...{api_key[-4:]}" if api_key else "[red]Not set[/red]"
                 config_table.add_row("ANTHROPIC_API_KEY", api_display)
                 config_table.add_row("MODEL_NAME", CONFIG.MODEL_NAME)
-                config_table.add_row("MAX_ITERATIONS", str(CONFIG.MAX_ITERATIONS))
 
                 # Database settings
                 if CONFIG.DATABASE_URL:
@@ -1516,22 +1070,13 @@ Examples:
   # Batch process URLs from file (works with mixed source types)
   %(prog)s batch --file urls.txt
 
-  # Run test suite
-  %(prog)s test
-
   # Validate saved extraction
   %(prog)s validate --json output/林炳尧_20260211.json
-
-  # Replay conversation
-  %(prog)s replay --json output/林炳尧_20260211.json
-
-  # Show statistics
-  %(prog)s stats --dir output/
 
   # Interactive mode (REPL)
   %(prog)s interactive
 
-For more information: https://github.com/your-org/pla-agent-sdk
+For more information, see README.md and docs/ in this repository.
         """
     )
 
@@ -1586,31 +1131,12 @@ For more information: https://github.com/your-org/pla-agent-sdk
         help='Save high-confidence results to database'
     )
     parser_batch.add_argument(
-        '--parallel', '-p',
-        type=int,
-        metavar='N',
-        help='Number of parallel workers (not yet implemented)'
-    )
-    parser_batch.add_argument(
         '--rate-limit',
         type=float,
         default=1.0,
         help='Seconds between requests (default: 1.0)'
     )
     parser_batch.set_defaults(func=cmd_batch)
-
-    # Command: test
-    parser_test = subparsers.add_parser(
-        'test',
-        help='Run test suite',
-        description='Run extraction test suite on source file'
-    )
-    parser_test.add_argument(
-        '--obituary',
-        type=str,
-        help='Test obituary file (default: data/test_obituary.txt)'
-    )
-    parser_test.set_defaults(func=cmd_test)
 
     # Command: validate
     parser_validate = subparsers.add_parser(
@@ -1625,34 +1151,6 @@ For more information: https://github.com/your-org/pla-agent-sdk
         help='Path to saved extraction JSON file'
     )
     parser_validate.set_defaults(func=cmd_validate)
-
-    # Command: replay
-    parser_replay = subparsers.add_parser(
-        'replay',
-        help='Replay saved extraction conversation',
-        description='Replay and display a saved extraction conversation'
-    )
-    parser_replay.add_argument(
-        '--json',
-        type=str,
-        required=True,
-        help='Path to saved extraction JSON file'
-    )
-    parser_replay.set_defaults(func=cmd_replay)
-
-    # Command: stats
-    parser_stats = subparsers.add_parser(
-        'stats',
-        help='Analyze all extractions in directory',
-        description='Analyze and display aggregate statistics for all extractions'
-    )
-    parser_stats.add_argument(
-        '--dir',
-        type=str,
-        default='output/',
-        help='Directory containing extraction files (default: output/)'
-    )
-    parser_stats.set_defaults(func=cmd_stats)
 
     # Command: interactive
     parser_interactive = subparsers.add_parser(

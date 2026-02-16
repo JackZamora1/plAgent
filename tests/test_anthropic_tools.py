@@ -151,9 +151,10 @@ def test_execute_save_officer_bio_invalid_date():
     console.print("\n[bold cyan]Testing execute_save_officer_bio() - Invalid Date[/bold cyan]")
 
     # Invalid input - bad date format
+    # Use non-placeholder URL so this test isolates date validation behavior.
     invalid_input = {
         "name": "测试",
-        "source_url": "https://example.com",
+        "source_url": "https://www.news.cn/example/c.html",
         "birth_date": "95-01-01",  # Invalid format!
     }
 

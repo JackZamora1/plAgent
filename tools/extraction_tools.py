@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Type
 from pydantic import BaseModel, ValidationError
 from schema import OfficerBio, ToolResult, Promotion
+from safeguards import validate_real_source_url
 
 
 def extract_text_from_url(url: str) -> str:
@@ -236,6 +237,27 @@ def execute_save_officer_bio(tool_input: Dict[str, Any]) -> ToolResult:
         - The validated OfficerBio object is included in result.data['officer_bio']
     """
     tool_input = _sanitize_tool_input(tool_input)
+
+    source_url = tool_input.get('source_url', '')
+    source_url_valid, source_url_msg = validate_real_source_url(source_url)
+    if not source_url_valid:
+        return ToolResult(
+            tool_name="save_officer_bio",
+            success=False,
+            data={
+                "validation": "failed",
+                "errors": [
+                    source_url_msg,
+                    "Please provide the actual source URL (e.g., https://www.news.cn/...)"
+                ],
+                "input": tool_input
+            },
+            error=(
+                f"WARNING: Placeholder URL detected: {source_url}\n"
+                "This suggests the extraction may be using incorrect source data.\n"
+                "Please verify the source URL is correct before saving."
+            )
+        )
 
     try:
         # Validate input against OfficerBio schema

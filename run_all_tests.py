@@ -28,6 +28,10 @@ import argparse
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+REPORT_DIR = Path("output") / "reports"
+HTML_REPORT_PATH = REPORT_DIR / "test_results.html"
+JSON_REPORT_PATH = REPORT_DIR / "test_results.json"
+
 try:
     import pytest
     from rich.console import Console
@@ -133,20 +137,21 @@ def print_header():
     console.print()
 
 
-def discover_tests() -> dict:
+def discover_tests(show_warnings: bool = True) -> dict:
     """
     Discover all test files and categorize them.
 
     Returns:
         Dictionary mapping test categories to file paths
     """
-    test_dir = Path(__file__).parent
+    test_dir = Path(__file__).parent / "tests"
 
     tests = {
         "unit": {
             "schema": test_dir / "test_schema.py",
             "config": test_dir / "test_config.py",
             "tool_registry": test_dir / "test_tool_registry.py",
+            "offline_smoke": test_dir / "test_offline_smoke.py",
         },
         "validation": {
             "validation_tools": test_dir / "test_validation_tools.py",
@@ -155,7 +160,7 @@ def discover_tests() -> dict:
         "integration": {
             "agent": test_dir / "test_agent.py",
             "anthropic_tools": test_dir / "test_anthropic_tools.py",
-            "workflow": test_dir / "test_workflow.py",
+            "source_context_regression": test_dir / "test_source_context_regression.py",
         },
         "batch": {
             "batch_processor": test_dir / "test_batch_processor.py",
@@ -168,13 +173,18 @@ def discover_tests() -> dict:
         for name, path in test_files.items():
             if path.exists():
                 all_tests.append(str(path))
-            else:
+            elif show_warnings:
                 console.print(f"[yellow]Warning: Test file not found: {path}[/yellow]")
 
     return tests, all_tests
 
 
-def run_pytest_suite(test_files: list, fast_mode: bool = False, verbose: bool = False) -> tuple:
+def run_pytest_suite(
+    test_files: list,
+    fast_mode: bool = False,
+    verbose: bool = False,
+    ci_mode: bool = False
+) -> tuple:
     """
     Run pytest test suite.
 
@@ -195,10 +205,10 @@ def run_pytest_suite(test_files: list, fast_mode: bool = False, verbose: bool = 
         "--tb=short",
         "--strict-markers",
         "--disable-warnings",
-        f"--html=test_results.html",
+        f"--html={HTML_REPORT_PATH}",
         "--self-contained-html",
         "--json-report",
-        "--json-report-file=test_results.json",
+        f"--json-report-file={JSON_REPORT_PATH}",
     ]
 
     # Add markers for fast mode
@@ -209,7 +219,9 @@ def run_pytest_suite(test_files: list, fast_mode: bool = False, verbose: bool = 
     # Add test files
     pytest_args.extend(test_files)
 
-    console.print("[cyan]Running pytest test suite...[/cyan]\n")
+    if not ci_mode:
+        console.print("[cyan]Running pytest test suite...[/cyan]\n")
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Run pytest
     try:
@@ -218,7 +230,7 @@ def run_pytest_suite(test_files: list, fast_mode: bool = False, verbose: bool = 
         metrics.finish()
 
         # Load test results from JSON report
-        json_report_path = Path("test_results.json")
+        json_report_path = JSON_REPORT_PATH
         if json_report_path.exists():
             with open(json_report_path, 'r') as f:
                 report_data = json.load(f)
@@ -240,7 +252,8 @@ def run_pytest_suite(test_files: list, fast_mode: bool = False, verbose: bool = 
         return exit_code, metrics
 
     except Exception as e:
-        console.print(f"[red]Error running tests: {e}[/red]")
+        if not ci_mode:
+            console.print(f"[red]Error running tests: {e}[/red]")
         metrics.finish()
         return 1, metrics
 
@@ -324,8 +337,8 @@ def display_test_summary(metrics: TestMetrics):
 
     # Output files
     console.print("[cyan]Generated Reports:[/cyan]")
-    console.print("  [green]✓[/green] test_results.html - Detailed HTML report")
-    console.print("  [green]✓[/green] test_results.json - JSON test data")
+    console.print(f"  [green]✓[/green] {HTML_REPORT_PATH} - Detailed HTML report")
+    console.print(f"  [green]✓[/green] {JSON_REPORT_PATH} - JSON test data")
     console.print()
 
 
@@ -333,7 +346,7 @@ def generate_enhanced_html_report():
     """
     Enhance the pytest HTML report with custom styling and health score.
     """
-    html_path = Path("test_results.html")
+    html_path = HTML_REPORT_PATH
 
     if not html_path.exists():
         return
@@ -343,7 +356,7 @@ def generate_enhanced_html_report():
         html_content = html_path.read_text(encoding='utf-8')
 
         # Calculate metrics from JSON report
-        json_path = Path("test_results.json")
+        json_path = JSON_REPORT_PATH
         if json_path.exists():
             with open(json_path, 'r') as f:
                 report_data = json.load(f)
@@ -353,7 +366,16 @@ def generate_enhanced_html_report():
             metrics.total_tests = summary.get('total', 0)
             metrics.passed = summary.get('passed', 0)
             metrics.failed = summary.get('failed', 0)
-            metrics.duration = report_data.get('duration', 0)
+            # Reflect failed/error tests so health score critical component is accurate.
+            for test in report_data.get('tests', []):
+                if test.get('outcome') in ['failed', 'error']:
+                    metrics.errors.append({
+                        'name': test.get('nodeid', 'unknown'),
+                        'message': test.get('call', {}).get('longrepr', 'No message'),
+                    })
+            # Reconstruct timer fields so health scoring uses real pytest duration.
+            metrics.start_time = 0.0
+            metrics.end_time = float(report_data.get('duration', 0.0))
 
             health_score = metrics.calculate_health_score()
             health_status, _ = metrics.get_health_status()
@@ -376,7 +398,7 @@ def generate_enhanced_html_report():
                     <div style="margin-top: 15px; font-size: 14px; opacity: 0.9;">
                         {metrics.passed}/{metrics.total_tests} tests passed •
                         {metrics.failed} failed •
-                        {metrics.duration:.1f}s duration
+                        {metrics.get_duration():.1f}s duration
                     </div>
                 </div>
             </div>
@@ -431,8 +453,9 @@ def main():
         print_header()
 
     # Discover tests
-    console.print("[cyan]Discovering test files...[/cyan]")
-    test_categories, all_test_files = discover_tests()
+    if not args.ci:
+        console.print("[cyan]Discovering test files...[/cyan]")
+    test_categories, all_test_files = discover_tests(show_warnings=not args.ci)
 
     # Select tests based on category
     if args.category == 'all':
@@ -443,10 +466,12 @@ def main():
             if test_path.exists():
                 selected_tests.append(str(test_path))
 
-    console.print(f"[green]Found {len(selected_tests)} test file(s)[/green]\n")
+    if not args.ci:
+        console.print(f"[green]Found {len(selected_tests)} test file(s)[/green]\n")
 
     if not selected_tests:
-        console.print("[red]No tests found![/red]")
+        if not args.ci:
+            console.print("[red]No tests found![/red]")
         return 1
 
     # Display test plan (unless in CI mode)
@@ -493,7 +518,8 @@ def main():
         exit_code, metrics = run_pytest_suite(
             selected_tests,
             fast_mode=args.fast,
-            verbose=args.verbose
+            verbose=args.verbose,
+            ci_mode=args.ci
         )
 
         if not args.ci:
@@ -502,8 +528,8 @@ def main():
             else:
                 progress.update(task, description="[red]✗ Some tests failed[/red]")
 
-    # Display summary (unless in CI mode with failures)
-    if not args.ci or exit_code == 0:
+    # Display summary only in interactive mode.
+    if not args.ci:
         display_test_summary(metrics)
 
     # Enhance HTML report
@@ -527,7 +553,8 @@ def main():
 
     # Exit with appropriate code
     if exit_code != 0:
-        console.print("\n[red]❌ Tests failed - see test_results.html for details[/red]\n")
+        if not args.ci:
+            console.print(f"\n[red]❌ Tests failed - see {HTML_REPORT_PATH} for details[/red]\n")
         return 1
     else:
         if not args.ci:

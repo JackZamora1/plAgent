@@ -41,7 +41,9 @@ from rich import box
 from agent import PLAgentSDK
 from schema import AgentExtractionResult
 from fetch_source import fetch_source_content
+from source_profiles import SourceProfileRegistry
 from tools.database_tools import save_officer_bio_to_database
+from safeguards import validate_source_text_not_fixture
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -50,7 +52,11 @@ console = Console()
 class BatchProcessor:
     """Batch processor for extracting officer biographies from multiple obituaries."""
 
-    def __init__(self, require_db: bool = False, rate_limit_seconds: float = 1.0):
+    def __init__(
+        self,
+        require_db: bool = False,
+        rate_limit_seconds: float = 1.0
+    ):
         """
         Initialize batch processor.
 
@@ -184,20 +190,20 @@ class BatchProcessor:
         except Exception as e:
             logger.error(f"Failed to flag result for review: {e}")
 
-    def process_urls(self, urls: List[str], save_to_db: bool = False,
-                     source_type: str = "universal") -> List[AgentExtractionResult]:
+    def process_urls(self, urls: List[str], save_to_db: bool = False) -> List[AgentExtractionResult]:
         """
         Process multiple URLs and extract officer biographies.
 
         Args:
             urls: List of source URLs to process
             save_to_db: Whether to save high-confidence results to database
-            source_type: Type of source material (default: "universal" - Claude adapts automatically)
-
         Returns:
             List of extraction results
         """
         results = []
+        profile_registry = SourceProfileRegistry()
+        profile = profile_registry.get("universal")
+        review_threshold = profile.min_confidence_threshold
 
         console.print(f"\n[bold cyan]Processing {len(urls)} sources...[/bold cyan]\n")
 
@@ -227,11 +233,11 @@ class BatchProcessor:
                         continue
 
                     # Extract biography using agent
-                    logger.info(f"Extracting biography for URL {i+1}/{len(urls)} (type: {source_type})")
+                    validate_source_text_not_fixture(source_text, url, Path(__file__).parent)
+                    logger.info(f"Extracting biography for URL {i+1}/{len(urls)}")
                     result = self.sdk.extract_bio_agentic(
                         source_text=source_text,
-                        source_url=url,
-                        source_type=source_type
+                        source_url=url
                     )
 
                     # Update counters
@@ -247,12 +253,12 @@ class BatchProcessor:
                     if result.success and result.officer_bio:
                         confidence = result.officer_bio.confidence_score
 
-                        if confidence < 0.8:
+                        if confidence < review_threshold:
                             # Low confidence - flag for review
                             self.flag_for_review(
                                 result,
                                 url,
-                                f"Low confidence score: {confidence:.2f}"
+                                f"Low confidence score: {confidence:.2f} (threshold: {review_threshold:.2f})"
                             )
                         elif save_to_db:
                             # High confidence - save to database if requested
@@ -294,16 +300,13 @@ class BatchProcessor:
         console.print(f"\n[bold green]✓ Completed processing {self.total_processed} sources[/bold green]\n")
         return results
 
-    def process_from_file(self, filepath: str, save_to_db: bool = False,
-                         source_type: str = "universal") -> List[AgentExtractionResult]:
+    def process_from_file(self, filepath: str, save_to_db: bool = False) -> List[AgentExtractionResult]:
         """
         Process URLs from a text file (one URL per line).
 
         Args:
             filepath: Path to file containing URLs
             save_to_db: Whether to save high-confidence results to database
-            source_type: Type of source material (default: "universal" - Claude adapts automatically)
-
         Returns:
             List of extraction results
         """
@@ -316,7 +319,7 @@ class BatchProcessor:
             logger.info(f"Found {len(urls)} URLs in file")
             console.print(f"[cyan]Found {len(urls)} URLs in {filepath}[/cyan]")
 
-            return self.process_urls(urls, save_to_db=save_to_db, source_type=source_type)
+            return self.process_urls(urls, save_to_db=save_to_db)
 
         except FileNotFoundError:
             logger.error(f"File not found: {filepath}")

@@ -14,6 +14,10 @@ from rich.text import Text
 from rich import box
 from rich.columns import Columns
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from schema import AgentExtractionResult, OfficerBio, ToolResult
 
 console = Console()
@@ -560,16 +564,16 @@ def main():
     if len(sys.argv) < 2:
         console.print("[bold cyan]PLA Agent SDK - Debug Tool[/bold cyan]\n")
         console.print("Usage:")
-        console.print("  [yellow]python debug_agent.py replay <json_file>[/yellow]")
+        console.print("  [yellow]python scripts/debug_agent.py replay <json_file>[/yellow]")
         console.print("    Replay extraction conversation step-by-step\n")
-        console.print("  [yellow]python debug_agent.py analyze <json_file>[/yellow]")
+        console.print("  [yellow]python scripts/debug_agent.py analyze <json_file>[/yellow]")
         console.print("    Analyze tool usage and generate statistics\n")
-        console.print("  [yellow]python debug_agent.py compare <file1> <file2>[/yellow]")
+        console.print("  [yellow]python scripts/debug_agent.py compare <file1> <file2>[/yellow]")
         console.print("    Compare two extraction results side-by-side\n")
         console.print("Examples:")
-        console.print("  python debug_agent.py replay output/test_extraction.json")
-        console.print("  python debug_agent.py analyze output/林炳尧_20250210_220500.json")
-        console.print("  python debug_agent.py compare output/v1.json output/v2.json")
+        console.print("  python scripts/debug_agent.py replay output/test_extraction.json")
+        console.print("  python scripts/debug_agent.py analyze output/林炳尧_20250210_220500.json")
+        console.print("  python scripts/debug_agent.py compare output/v1.json output/v2.json")
         sys.exit(1)
 
     command = sys.argv[1].lower()
@@ -577,21 +581,21 @@ def main():
     if command == "replay":
         if len(sys.argv) < 3:
             console.print("[bold red]Error:[/bold red] Missing JSON file argument")
-            console.print("Usage: python debug_agent.py replay <json_file>")
+            console.print("Usage: python scripts/debug_agent.py replay <json_file>")
             sys.exit(1)
         replay_conversation(sys.argv[2])
 
     elif command == "analyze":
         if len(sys.argv) < 3:
             console.print("[bold red]Error:[/bold red] Missing JSON file argument")
-            console.print("Usage: python debug_agent.py analyze <json_file>")
+            console.print("Usage: python scripts/debug_agent.py analyze <json_file>")
             sys.exit(1)
         analyze_tool_usage(sys.argv[2])
 
     elif command == "compare":
         if len(sys.argv) < 4:
             console.print("[bold red]Error:[/bold red] Missing file arguments")
-            console.print("Usage: python debug_agent.py compare <file1> <file2>")
+            console.print("Usage: python scripts/debug_agent.py compare <file1> <file2>")
             sys.exit(1)
         compare_extractions(sys.argv[2], sys.argv[3])
 

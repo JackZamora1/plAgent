@@ -20,9 +20,20 @@ class Config(BaseSettings):
     DB_PORT: int = Field(5432, description="Database port")
 
     # Agent configuration
-    MAX_ITERATIONS: int = Field(10, description="Maximum agentic loop iterations")
     MODEL_NAME: str = Field("claude-sonnet-4-5-20250929", description="Claude model to use")
     LOG_LEVEL: str = Field("INFO", description="Logging level")
+    MAX_VERIFY_CALLS_PER_EXTRACTION: int = Field(
+        2,
+        description="Max verify_information_present calls per extraction in single_pass mode"
+    )
+    ENABLE_FEW_SHOT_SINGLE_PASS: bool = Field(
+        False,
+        description="Enable few-shot examples in single_pass mode"
+    )
+    TOKEN_BUDGET_TARGET_AVG: int = Field(
+        15000,
+        description="Target average tokens per extraction (monitoring guidance)"
+    )
 
     model_config = {
         "env_file": ".env",

@@ -8,6 +8,8 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import box
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 console = Console()
 
 # All OfficerBio fields the agent could extract (excluding metadata)
@@ -395,10 +397,10 @@ def suggest_improvements(bio: dict, tool_calls: list) -> None:
 
 
 def main():
-    result_path = Path(__file__).parent / "output" / "test_extraction.json"
+    result_path = PROJECT_ROOT / "output" / "test_extraction.json"
     if not result_path.exists():
         console.print(f"[red]Result file not found: {result_path}[/red]")
-        console.print("Run test_agent.py first to generate extraction results.")
+        console.print("Run tests/test_agent.py first to generate extraction results.")
         return 1
 
     data = load_results(result_path)

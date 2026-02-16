@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Generator
 import logging
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 # Configure logging for tests
 logging.basicConfig(
     level=logging.WARNING,  # Reduce noise during tests
@@ -29,7 +31,7 @@ logging.basicConfig(
 def pytest_configure(config):
     """Configure pytest with custom settings."""
     # Ensure output directories exist
-    output_dir = Path(__file__).parent / "output"
+    output_dir = PROJECT_ROOT / "output"
     output_dir.mkdir(exist_ok=True)
 
     test_output = output_dir / "test_results"
@@ -78,13 +80,13 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture(scope="session")
 def test_data_dir() -> Path:
     """Get test data directory path."""
-    return Path(__file__).parent / "data"
+    return PROJECT_ROOT / "data"
 
 
 @pytest.fixture(scope="session")
 def test_output_dir() -> Path:
     """Get test output directory path."""
-    output_dir = Path(__file__).parent / "output" / "test_results"
+    output_dir = PROJECT_ROOT / "output" / "test_results"
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 
@@ -301,7 +303,7 @@ def extraction_result():
         pytest.skip("ANTHROPIC_API_KEY required for agent integration tests")
 
     # Load test data
-    test_file = Path(__file__).parent / "data" / "test_obituary.txt"
+    test_file = PROJECT_ROOT / "data" / "test_obituary.txt"
     if not test_file.exists():
         pytest.skip(f"Test data not found: {test_file}")
 
@@ -310,14 +312,28 @@ def extraction_result():
 
     # Run extraction with universal profile
     sdk = PLAgentSDK(require_db=False)
-    result = sdk.extract_bio_agentic(
-        source_text=source_text,
-        source_url="https://www.news.cn/test/obituary.html",
-        source_type="universal"
-    )
+    # Use an approved test URL prefix so fixture-content safeguards allow this context.
+    try:
+        result = sdk.extract_bio_agentic(
+            source_text=source_text,
+            source_url="https://test/obituary.html"
+        )
+    except Exception as e:
+        # Integration tests require live Anthropic connectivity.
+        error_text = str(e).lower()
+        connection_indicators = (
+            "connection error",
+            "api connection",
+            "nodename nor servname",
+            "name resolution",
+            "timed out",
+        )
+        if any(token in error_text for token in connection_indicators):
+            pytest.skip(f"Skipping API integration tests due to connectivity issue: {e}")
+        raise
 
     # Cache result to file for inspection
-    output_file = Path(__file__).parent / "output" / "test_extraction.json"
+    output_file = PROJECT_ROOT / "output" / "test_extraction.json"
     output_file.parent.mkdir(exist_ok=True)
 
     with open(output_file, 'w', encoding='utf-8') as f:

@@ -26,7 +26,6 @@ def test_config_instance():
         ("DB_USER", CONFIG.DB_USER if CONFIG.DB_USER else "Not set", str),
         ("DB_PASSWORD", "***" if CONFIG.DB_PASSWORD else "Not set", str),
         ("DB_PORT", CONFIG.DB_PORT, int),
-        ("MAX_ITERATIONS", CONFIG.MAX_ITERATIONS, int),
         ("MODEL_NAME", CONFIG.MODEL_NAME, str),
         ("LOG_LEVEL", CONFIG.LOG_LEVEL, str),
     ]
@@ -81,7 +80,6 @@ def test_pydantic_features():
 
     # Test field validation
     console.print(f"\n[bold]Field Types:[/bold]")
-    console.print(f"  MAX_ITERATIONS: {type(CONFIG.MAX_ITERATIONS).__name__} = {CONFIG.MAX_ITERATIONS}")
     console.print(f"  DB_PORT: {type(CONFIG.DB_PORT).__name__} = {CONFIG.DB_PORT}")
     console.print(f"  MODEL_NAME: {type(CONFIG.MODEL_NAME).__name__} = {CONFIG.MODEL_NAME}")
 

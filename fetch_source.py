@@ -7,9 +7,10 @@ This module provides unified content fetching across different source types:
 - Wikipedia articles
 - Generic HTML pages
 
-Replaces the deprecated fetch_obituary module.
+Consolidates earlier source-specific fetch logic into one module.
 """
 import sys
+import logging
 import requests
 from bs4 import BeautifulSoup
 from pathlib import Path
@@ -17,6 +18,7 @@ from rich.console import Console
 from typing import Optional
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def detect_source_type(url: str) -> str:
@@ -57,7 +59,7 @@ def detect_source_type(url: str) -> str:
     return "news_article"
 
 
-def fetch_source_content(url: str, source_type: str = "obituary") -> str:
+def fetch_source_content(url: str) -> str:
     """
     Fetch content from URL with source-aware parsing.
 
@@ -66,8 +68,6 @@ def fetch_source_content(url: str, source_type: str = "obituary") -> str:
 
     Args:
         url: Source URL
-        source_type: Type of source for logging purposes (doesn't affect extraction)
-
     Returns:
         Cleaned text content
 
@@ -75,18 +75,28 @@ def fetch_source_content(url: str, source_type: str = "obituary") -> str:
         requests.RequestException: If request fails
         ValueError: If content cannot be extracted
     """
+    logger.debug(f"fetch_source_content called with URL: {url}")
     detected_source_type = detect_source_type(url)
-    effective_source_type = source_type if source_type != "universal" else detected_source_type
-    console.print(f"[bold cyan]Fetching {effective_source_type} from:[/bold cyan] {url}")
+
+    logger.debug(f"Detected source type: {detected_source_type}")
+    console.print(f"[bold cyan]Fetching {detected_source_type} from:[/bold cyan] {url}")
 
     # Detect domain and route to appropriate fetcher
     if "news.cn" in url or "xinhuanet.com" in url or "81.cn" in url:
-        return fetch_xinhua_article(url)
+        logger.debug("Routing to fetch_xinhua_article()")
+        content = fetch_xinhua_article(url)
     elif "wikipedia.org" in url:
-        return fetch_wikipedia_article(url)
+        logger.debug("Routing to fetch_wikipedia_article()")
+        content = fetch_wikipedia_article(url)
     else:
         # Generic fallback for other sources
-        return fetch_generic_html(url)
+        logger.debug("Routing to fetch_generic_html()")
+        content = fetch_generic_html(url)
+
+    logger.debug(f"Fetched content length: {len(content)} chars")
+    logger.debug(f"First 100 chars: {content[:100]}...")
+
+    return content
 
 
 def fetch_xinhua_article(url: str) -> str:
@@ -114,12 +124,18 @@ def fetch_xinhua_article(url: str) -> str:
     }
 
     try:
+        logger.debug(f"Sending GET request to: {url}")
+
         # Fetch the webpage
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
 
         # Auto-detect encoding if needed
         response.encoding = response.apparent_encoding
+
+        logger.debug(f"Response status: {response.status_code}")
+        logger.debug(f"Response encoding: {response.encoding}")
+        logger.debug(f"Response content length: {len(response.text)} chars")
 
         console.print("[bold green]✓ Page fetched successfully[/bold green]")
 
@@ -340,22 +356,21 @@ def save_to_file(text: str, output_path: Path) -> None:
 def main():
     """Main function for CLI usage."""
     if len(sys.argv) < 2:
-        console.print("[bold red]Usage: python fetch_source.py <url> [source_type][/bold red]")
+        console.print("[bold red]Usage: python fetch_source.py <url>[/bold red]")
         console.print("\nExample:")
-        console.print("  python fetch_source.py https://www.news.cn/... obituary")
-        console.print("  python fetch_source.py https://zh.wikipedia.org/... wiki")
+        console.print("  python fetch_source.py https://www.news.cn/...")
+        console.print("  python fetch_source.py https://zh.wikipedia.org/...")
         sys.exit(1)
 
     url = sys.argv[1]
-    source_type = sys.argv[2] if len(sys.argv) > 2 else "unknown"
 
     # Output file path
     script_dir = Path(__file__).parent
-    output_file = script_dir / 'data' / f'test_{source_type}.txt'
+    output_file = script_dir / 'data' / f"test_{detect_source_type(url)}.txt"
 
     try:
         # Fetch content
-        content = fetch_source_content(url, source_type)
+        content = fetch_source_content(url)
 
         # Save to file
         save_to_file(content, output_file)
