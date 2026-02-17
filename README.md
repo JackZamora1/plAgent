@@ -49,7 +49,7 @@ Typical runtime profile:
 ### 1. Clone and enter project
 
 ```bash
-cd "pla-agent-sdk"
+cd "plagent"
 ```
 
 ### 2. Create virtual environment
