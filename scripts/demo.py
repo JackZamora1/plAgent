@@ -47,7 +47,7 @@ def print_header():
     ║         Automated Biographical Data Extraction from          ║
     ║            Chinese Military Biographical Sources             ║
     ║                                                               ║
-    ║                Powered by Claude Sonnet 4.5                  ║
+    ║                Powered by Claude Sonnet 4.6                  ║
     ║                                                               ║
     ╚═══════════════════════════════════════════════════════════════╝
     """
@@ -107,7 +107,7 @@ def initialize_agent():
     print_step(
         2,
         "Initializing Agent",
-        "Loading Claude Sonnet 4.5 with agentic tool use"
+        "Loading Claude Sonnet 4.6 with agentic tool use"
     )
 
     # Setup logging for verbose mode
@@ -120,7 +120,7 @@ def initialize_agent():
     config_table = Table(show_header=False, box=None)
     config_table.add_column("Setting", style="cyan")
     config_table.add_column("Value", style="white")
-    config_table.add_row("Model", "claude-sonnet-4-5-20250929")
+    config_table.add_row("Model", "claude-sonnet-4-6")
     config_table.add_row("Max Iterations", "10")
     config_table.add_row("Tools Available", "6")
     config_table.add_row("Database", "PostgreSQL (optional)")

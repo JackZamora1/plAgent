@@ -20,7 +20,7 @@ class Config(BaseSettings):
     DB_PORT: int = Field(5432, description="Database port")
 
     # Agent configuration
-    MODEL_NAME: str = Field("claude-sonnet-4-5-20250929", description="Claude model to use")
+    MODEL_NAME: str = Field("claude-sonnet-4-6", description="Claude model to use")
     LOG_LEVEL: str = Field("INFO", description="Logging level")
     MAX_VERIFY_CALLS_PER_EXTRACTION: int = Field(
         2,

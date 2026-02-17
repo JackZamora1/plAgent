@@ -13,7 +13,7 @@ DATABASE_URL=postgresql://user:password@localhost:5432/pla_db
 # or DB_HOST / DB_NAME / DB_USER / DB_PASSWORD / DB_PORT
 
 # Optional runtime tuning
-MODEL_NAME=claude-sonnet-4-5-20250929
+MODEL_NAME=claude-sonnet-4-6
 LOG_LEVEL=INFO
 MAX_VERIFY_CALLS_PER_EXTRACTION=2
 ENABLE_FEW_SHOT_SINGLE_PASS=false
